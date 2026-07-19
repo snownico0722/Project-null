@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.7.5
+// @version      0.7.6
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
@@ -341,6 +341,22 @@
     }
   }
 
+  function usernameFromAvatarSrc(src) {
+    if (src === null || src === undefined || src === '') return '';
+    try {
+      const url = new URL(String(src), location.href);
+      const match = url.pathname.match(/\/user_avatar\/[^/]+\/([^/?#]+)(?:\/|$)/i);
+      if (!match) return '';
+      try {
+        return decodeURIComponent(match[1]);
+      } catch (_) {
+        return match[1];
+      }
+    } catch (_) {
+      return '';
+    }
+  }
+
   function profileUsernameFromDestination(destination) {
     if (destination === null || destination === undefined || destination === '') return '';
     try {
@@ -383,10 +399,16 @@
 
   function usernameOf(element) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return '';
+    const nestedAvatar = element.querySelector?.(
+      'img.avatar, img.user-image, img[data-avatar-template]'
+    );
     return normalizeUsername(
       element.getAttribute('data-user-card')
       || element.getAttribute('data-username')
       || usernameFromHref(element.getAttribute('href'))
+      || usernameFromAvatarSrc(element.getAttribute('src'))
+      || usernameFromAvatarSrc(nestedAvatar?.getAttribute('src'))
+      || element.__lddReplyUsername
     );
   }
 
@@ -1141,6 +1163,7 @@
     if (element.matches('a.main-avatar, .topic-avatar a, .post-avatar a') && !String(element.textContent || '').trim()) return false;
     if (element.matches('.mention, [class*="mention"], .username, .full-name, .name, [class*="username"]')) return true;
     if (element.closest('.names, .user-profile-names, .user-card .names, #user-card .names, .topic-poster, .posters, .author, .search-result__author')) return true;
+    if (element.matches('a.reply-to-tab')) return true;
     const visible = normalizeUsername(String(element.textContent || '').trim().replace(/^@/, ''));
     return Boolean(visible && visible === username);
   }
@@ -1271,17 +1294,25 @@
   }
 
   function scanIdentities(root) {
-    const selector = '[data-user-card], [data-username], a[href*="/u/"]';
+    const selector = '[data-user-card], [data-username], a[href*="/u/"], a.reply-to-tab, .discourse-boosts__bubble';
     const elements = collect(root, selector);
 
     for (const element of elements) {
-      const username = usernameOf(element);
+      const isBoostBubble = element.matches('.discourse-boosts__bubble');
+      const boostAuthor = isBoostBubble
+        ? element.querySelector('[data-user-card], [data-username], a[href*="/u/"]')
+        : null;
+      const username = normalizeUsername(
+        (boostAuthor && usernameOf(boostAuthor)) || usernameOf(element) || element.__lddBoostUsername
+      );
+      if (username && isBoostBubble) element.__lddBoostUsername = username;
+      if (username && element.matches('a.reply-to-tab')) element.__lddReplyUsername = username;
       recordVisibleRealUsername(username, element);
       if (!shouldAnonymizeUsername(username)) {
         restoreIdentityNeighborhood(element);
         continue;
       }
-      const carrier = element.matches('a, span, strong, b, img, picture, .avatar, .username, .name');
+      const carrier = element.matches('a, span, strong, b, img, picture, .avatar, .username, .name, .discourse-boosts__bubble');
       if (!carrier) continue;
       const replaceText = shouldReplaceIdentityText(element, username);
       const hasAvatar = Boolean(
@@ -1345,10 +1376,11 @@
     if (!runtime.dissolvedSet.size && !runtime.state.config.pureMode) return;
     const roots = new Set(collect(root, [
       '.cooked', '.excerpt', '.topic-excerpt', '.fps-result', '.search-result',
-      '.user-stream-item', '.activity-stream .item', '.bookmark-list-item'
+      '.user-stream-item', '.activity-stream .item', '.bookmark-list-item',
+      '.discourse-boosts__cooked'
     ].join(',')));
     if (root?.nodeType === Node.ELEMENT_NODE) {
-      const closest = root.closest('.cooked, .excerpt, .topic-excerpt, .fps-result, .search-result, .user-stream-item, .activity-stream .item, .bookmark-list-item');
+      const closest = root.closest('.cooked, .excerpt, .topic-excerpt, .fps-result, .search-result, .user-stream-item, .activity-stream .item, .bookmark-list-item, .discourse-boosts__cooked');
       if (closest) roots.add(closest);
     }
     for (const textRoot of roots) {
@@ -1390,6 +1422,52 @@
       addPatchedClass(title, 'ldd-dissolved-name');
       markTriggered(title);
       recordExposedIdentity(username, identity, title);
+    }
+  }
+
+  function scanNotificationLabels(root) {
+    const labels = collect(root, '.notification span.item-label, .notification .item-label');
+    for (const label of labels) {
+      const nodes = visibleTextNodes(label);
+      if (!nodes.length) continue;
+      const sources = nodes.map(node => sourceTextForPatch(label, 'notification-label', node));
+      const combined = sources.join('').trim();
+      const names = new Set(anonymizedUsernames());
+      if (runtime.state.config.pureMode && /^[A-Za-z0-9_.-]{1,40}$/.test(combined)) {
+        const candidate = normalizeUsername(combined);
+        names.add(candidate);
+        recordVisibleRealUsername(candidate, label);
+      }
+      const escaped = Array.from(names)
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length)
+        .map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      if (!escaped.length) {
+        if (label.__lddOriginal?.textPatches?.some(record => record.key === 'notification-label')) {
+          restoreElement(label);
+        }
+        continue;
+      }
+      const pattern = new RegExp('(^|[^A-Za-z0-9_.-])(' + escaped.join('|') + ')(?![A-Za-z0-9_.-])', 'gi');
+      let changed = false;
+      const cleaned = sources.map(source => source.replace(pattern, (whole, prefix, rawUsername) => {
+        const username = normalizeUsername(rawUsername);
+        if (!shouldAnonymizeUsername(username)) return whole;
+        const identity = identityFor(username, label);
+        changed = true;
+        markTriggered(label);
+        recordExposedIdentity(username, identity, label);
+        return (prefix || '') + identity.alias;
+      }));
+      if (!changed || cleaned.join('') === sources.join('')) {
+        if (label.__lddOriginal?.textPatches?.some(record => record.key === 'notification-label')) {
+          restoreElement(label);
+        }
+        continue;
+      }
+      pruneTextPatchKey(label, 'notification-label', nodes);
+      nodes.forEach((node, index) => patchTextNode(label, 'notification-label', node, cleaned[index]));
+      addPatchedClass(label, 'ldd-dissolved-name');
     }
   }
 
@@ -1814,6 +1892,7 @@
       scanIdentityDecorations(root);
       scanPlainMentions(root);
       scanQuoteAuthors(root);
+      scanNotificationLabels(root);
       scanSignatures(root);
       scanTitles(root);
       scanUserCards(root);
@@ -1907,6 +1986,7 @@
       '.fps-result, .search-result, .user-card, #user-card, .cooked, .excerpt, ' +
       '.topic-excerpt, #topic-title, .topic-title, .user-stream-item, ' +
       '.activity-stream .item, .bookmark-list-item, .signature-img, .user-signature'
+      + ', .notification, .item-label, .reply-to-tab, .discourse-boosts__bubble'
     );
     runtime.pendingRoots.add(context || element);
   }
@@ -2242,7 +2322,7 @@
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="cleanTopicTitles">清洗帖子标题的括号和 Emoji</label>
                 <div>
                   <label class="ldd-check"><input type="checkbox" data-ldd-option="pureMode">纯净模式</label>
-                  <small class="ldd-option-note">类似匿名版：溶解所有人并清洗所有标题；隐藏帖子不生效。</small>
+                  <small class="ldd-option-note">类似匿名版：溶解所有人并清洗所有标题。</small>
                 </div>
               </div>
             </div>
