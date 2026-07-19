@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.2
+// @version      0.8.3
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
@@ -1308,7 +1308,10 @@
         if (
           mutation.type === 'attributes'
           && !isExpectedPatchedAttributeMutation(mutation.target, mutation.attributeName)
-        ) addScanRoot(mutation.target);
+        ) {
+          markTransientMutation(mutation.target);
+          addScanRoot(mutation.target);
+        }
       }
       if (runtime.pendingRoots.size) queueScan();
     });
@@ -1360,6 +1363,14 @@
     if (container.getAttribute('data-ldd-identity-state') !== state) {
       container.setAttribute('data-ldd-identity-state', state);
     }
+  }
+
+  function markTransientMutation(node) {
+    const element = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+    const container = element.closest?.('.discourse-boosts__bubble');
+    if (container) setTransientIdentityState(container, 'pending');
+    return container || null;
   }
 
   function scanIdentities(root) {
@@ -2198,18 +2209,27 @@
       if (runtime.suppressMutations) return;
       for (const mutation of mutations) {
         if (mutation.type === 'childList') {
-          mutation.addedNodes.forEach(node => addScanRoot(node));
+          markTransientMutation(mutation.target);
+          mutation.addedNodes.forEach(node => {
+            markTransientMutation(node);
+            addScanRoot(node);
+          });
           if (mutation.addedNodes.length || mutation.removedNodes.length) addScanRoot(mutation.target);
           continue;
         }
         if (mutation.type === 'characterData') {
+          markTransientMutation(mutation.target.parentElement);
           addScanRoot(mutation.target.parentElement);
           continue;
         }
         if (
           mutation.type === 'attributes'
           && !isExpectedPatchedAttributeMutation(mutation.target, mutation.attributeName)
-        ) addScanRoot(mutation.target);
+        ) {
+          const transient = markTransientMutation(mutation.target);
+          if (mutation.attributeName === 'class' && !transient) continue;
+          addScanRoot(mutation.target);
+        }
       }
       if (runtime.pendingRoots.size) queueScan();
       else ensureHeaderButton();
@@ -2221,7 +2241,7 @@
       attributes: true,
       attributeFilter: [
         'data-user-card', 'data-username', 'href', 'src', 'srcset',
-        'title', 'aria-label', 'alt', 'data-topic-id'
+        'title', 'aria-label', 'alt', 'data-topic-id', 'class'
       ]
     });
   }
@@ -2375,6 +2395,7 @@
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
       [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]),[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]){visibility:hidden!important}
+      [data-ldd-active] .discourse-boosts__bubble[data-ldd-identity-state="pending"]{visibility:hidden!important}
       .discourse-boosts__bubble[data-ldd-identity-state="masked"]>a:not(.ldd-boost-avatar-host){visibility:hidden!important}
       .discourse-boosts__bubble[data-ldd-identity-state="masked"]>a.ldd-boost-avatar-host{display:inline-flex!important;width:24px!important;height:24px!important;flex:0 0 24px!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
       .discourse-boosts__bubble[data-ldd-identity-state="masked"]>a.ldd-boost-avatar-host>img.avatar{visibility:hidden!important}
