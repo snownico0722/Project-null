@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.6
+// @version      0.8.7
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
@@ -1209,16 +1209,31 @@
   }
 
   function replaceReplyAvatar(reply, identity) {
-    if (!runtime.state.config.replaceAvatars || !reply || !identity) return;
+    if (!reply || !identity) return;
+    const host = reply.closest('article[data-post-id], .topic-post') || reply;
     setPatchedStyle(
-      reply,
-      'replyAvatar',
-      '--ldd-reply-avatar',
-      'url("' + identity.avatar.replace(/"/g, '%22') + '")',
+      host,
+      'replyAlias',
+      '--ldd-reply-alias',
+      '"' + identity.alias + '"',
       'important'
     );
-    reply.setAttribute('data-ldd-reply-avatar', '1');
-    reply.setAttribute('data-ldd-reply-alias', identity.alias);
+    host.setAttribute('data-ldd-reply-identity', '1');
+    if (runtime.state.config.replaceAvatars) {
+      setPatchedStyle(
+        host,
+        'replyAvatar',
+        '--ldd-reply-avatar',
+        'url("' + identity.avatar.replace(/"/g, '%22') + '")',
+        'important'
+      );
+      host.setAttribute('data-ldd-reply-avatar-enabled', '1');
+    }
+  }
+
+  function restoreReplyIdentity(reply) {
+    const host = reply?.closest?.('article[data-post-id], .topic-post') || reply;
+    if (host?.hasAttribute?.('data-ldd-reply-identity')) restoreElement(host);
   }
 
   function shouldReplaceIdentityText(element, username) {
@@ -1253,7 +1268,7 @@
     '.ldd-neutral-avatar-host',
     '.ldd-clear-avatar-frame',
     '[data-ldd-boost-avatar]',
-    '[data-ldd-reply-avatar]'
+    '[data-ldd-reply-identity]'
   ].join(',');
 
   const DECORATION_ARTIFACT_SELECTOR = [
@@ -1401,6 +1416,7 @@
       }
       if (!shouldAnonymizeUsername(username)) {
         restoreIdentityNeighborhood(element);
+        if (isReplyReference) restoreReplyIdentity(element);
         setTransientIdentityState(element, 'clear');
         continue;
       }
@@ -1411,7 +1427,7 @@
         element.matches?.('img.avatar, img.user-image, img[data-avatar-template], .avatar')
         || element.querySelector?.('img.avatar, img.user-image, img[data-avatar-template], .avatar img, .avatar')
       );
-      if (!replaceText && !hasAvatar) {
+      if (!replaceText && !hasAvatar && !boostContainer && !isReplyReference) {
         restoreIdentityNeighborhood(element);
         setTransientIdentityState(element, 'masked');
         continue;
@@ -2109,6 +2125,16 @@
           else element.style.removeProperty('--ldd-reply-avatar');
         }
       }
+      if ('replyAlias' in original) {
+        const patch = original.replyAlias;
+        const current = element.style.getPropertyValue('--ldd-reply-alias');
+        const currentPriority = element.style.getPropertyPriority('--ldd-reply-alias');
+        const expected = applied.replyAlias;
+        if (!expected || (current === expected.value && currentPriority === expected.priority)) {
+          if (patch.value) element.style.setProperty('--ldd-reply-alias', patch.value, patch.priority || '');
+          else element.style.removeProperty('--ldd-reply-alias');
+        }
+      }
       if ('hidden' in original && (!('hidden' in applied) || element.hidden === applied.hidden)) {
         element.hidden = original.hidden;
       }
@@ -2129,8 +2155,8 @@
       element.removeAttribute('data-ldd-alias');
       element.removeAttribute('data-ldd-avatar-alias');
       element.removeAttribute('data-ldd-boost-avatar');
-      element.removeAttribute('data-ldd-reply-avatar');
-      element.removeAttribute('data-ldd-reply-alias');
+      element.removeAttribute('data-ldd-reply-identity');
+      element.removeAttribute('data-ldd-reply-avatar-enabled');
       element.removeAttribute('data-ldd-hidden-kind');
       element.removeAttribute('data-ldd-mutated');
       element.removeAttribute('data-ldd-identity-state');
@@ -2413,13 +2439,13 @@
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
       [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state])>img.avatar{visibility:hidden!important}
       [data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state])>a>img.avatar{visibility:hidden!important}
-      .discourse-boosts__bubble[data-ldd-identity-state="masked"]>a{display:none!important}
-      .discourse-boosts__bubble[data-ldd-identity-state="masked"]::before{content:"";display:block;width:24px;height:24px;flex:0 0 24px;background-image:var(--ldd-boost-avatar);background-size:cover;background-position:center;border-radius:50%}
-      a.reply-to-tab[data-ldd-identity-state="masked"]>img.avatar,a.reply-to-tab[data-ldd-identity-state="masked"]>img.user-image,a.reply-to-tab[data-ldd-identity-state="masked"]>img[data-avatar-template],a.reply-to-tab[data-ldd-identity-state="masked"]>.avatar{display:none!important}
-      a.reply-to-tab[data-ldd-identity-state="masked"]>.d-icon{order:0!important}
-      a.reply-to-tab[data-ldd-identity-state="masked"]>span{display:none!important}
-      a.reply-to-tab[data-ldd-identity-state="masked"]::before{content:"";display:block;order:1;width:24px;height:24px;flex:0 0 24px;background-image:var(--ldd-reply-avatar);background-size:cover;background-position:center;border-radius:50%}
-      a.reply-to-tab[data-ldd-identity-state="masked"]::after{content:attr(data-ldd-reply-alias);display:block;order:2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .discourse-boosts__bubble[data-ldd-boost-avatar]>a{display:none!important}
+      .discourse-boosts__bubble[data-ldd-boost-avatar]::before{content:"";display:block;width:24px;height:24px;flex:0 0 24px;background-image:var(--ldd-boost-avatar);background-size:cover;background-position:center;border-radius:50%}
+      [data-ldd-reply-avatar-enabled] a.reply-to-tab img.avatar,[data-ldd-reply-avatar-enabled] a.reply-to-tab img.user-image,[data-ldd-reply-avatar-enabled] a.reply-to-tab img[data-avatar-template],[data-ldd-reply-avatar-enabled] a.reply-to-tab .avatar{display:none!important}
+      [data-ldd-reply-identity] a.reply-to-tab>.d-icon{order:0!important}
+      [data-ldd-reply-identity] a.reply-to-tab span{display:none!important}
+      [data-ldd-reply-avatar-enabled] a.reply-to-tab::before{content:"";display:block;order:1;width:24px;height:24px;flex:0 0 24px;background-image:var(--ldd-reply-avatar);background-size:cover;background-position:center;border-radius:50%}
+      [data-ldd-reply-identity] a.reply-to-tab::after{content:var(--ldd-reply-alias);display:block;order:2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       [data-ldd-mutated].ldd-neutral-avatar,[data-ldd-mutated].ldd-neutral-avatar-host{border:none!important;box-shadow:none!important;outline:none!important;animation:none!important;filter:none!important;text-shadow:none!important}
       [data-ldd-mutated].ldd-neutral-avatar-host{background-color:transparent!important}
       [data-ldd-mutated].ldd-clear-avatar-frame{background-image:none!important}
@@ -2466,7 +2492,7 @@
       #${TOAST_ID}{position:fixed;z-index:100001;left:50%;bottom:28px;transform:translate(-50%,12px);padding:9px 13px;border-radius:8px;background:#26384a;color:#fff;font:12px/1.3 Arial,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 7px 24px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease}
       #${TOAST_ID}.is-visible{opacity:1;transform:translate(-50%,0)}
       @media(max-width:620px){#${UI_ID} .ldd-grid,#${UI_ID} .ldd-radios,#${UI_ID} .ldd-options{grid-template-columns:1fr}#${UI_ID} .ldd-dialog{max-height:calc(100vh - 20px)}#${UI_ID}{padding:10px}}
-      @media(max-width:767px){a.reply-to-tab[data-ldd-identity-state="masked"]::after{display:none}}
+      @media(max-width:767px){[data-ldd-reply-identity] a.reply-to-tab::after{display:none}}
       @media(prefers-reduced-motion:reduce){#${UI_ID} .ldd-switch::after,#${TOAST_ID}{transition:none}}
     `;
     (document.head || document.documentElement).appendChild(style);
