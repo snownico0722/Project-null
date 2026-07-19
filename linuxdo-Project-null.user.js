@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.7.4
+// @version      0.7.5
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
@@ -47,7 +47,7 @@
     mapAliasMentions: true,
     hideDissolvedTopics: true,
     cleanTopicTitles: true,
-    anonymousMode: false
+    pureMode: false
   });
 
   const ALIAS_WORDS = Object.freeze([
@@ -197,7 +197,7 @@
           ? config.hideDissolvedTopics
           : true,
         cleanTopicTitles,
-        anonymousMode: config.anonymousMode === true
+        pureMode: config.pureMode === true || config.anonymousMode === true
       },
       dissolvedUsers: uniqueUsernames(state.dissolvedUsers),
       secret: typeof state.secret === 'string' && state.secret.length >= 12
@@ -368,12 +368,12 @@
   function shouldAnonymizeUsername(username) {
     return Boolean(
       username
-      && (runtime.state.config.anonymousMode || runtime.dissolvedSet.has(username))
+      && (runtime.state.config.pureMode || runtime.dissolvedSet.has(username))
     );
   }
 
   function anonymizedUsernames() {
-    if (!runtime.state.config.anonymousMode) return runtime.dissolvedSet;
+    if (!runtime.state.config.pureMode) return runtime.dissolvedSet;
     const usernames = new Set(runtime.dissolvedSet);
     for (const names of runtime.visibleRealUsernames.values()) {
       names.forEach(username => usernames.add(username));
@@ -1342,7 +1342,7 @@
   }
 
   function scanPlainMentions(root) {
-    if (!runtime.dissolvedSet.size && !runtime.state.config.anonymousMode) return;
+    if (!runtime.dissolvedSet.size && !runtime.state.config.pureMode) return;
     const roots = new Set(collect(root, [
       '.cooked', '.excerpt', '.topic-excerpt', '.fps-result', '.search-result',
       '.user-stream-item', '.activity-stream .item', '.bookmark-list-item'
@@ -1605,6 +1605,7 @@
     for (const row of collect(root, '.topic-list-item, .latest-topic-list-item')) {
       const author = firstTopicPoster(row);
       const shouldHide = runtime.state.config.hideDissolvedTopics
+        && !runtime.state.config.pureMode
         && runtime.dissolvedSet.has(usernameOf(author));
       if (shouldHide) hideElement(row, 'topic');
       else if (row.getAttribute('data-ldd-hidden-kind') === 'topic') restoreElement(row);
@@ -1613,6 +1614,7 @@
     for (const result of collect(root, '.fps-result, .search-result')) {
       const author = searchResultPoster(result);
       const shouldHide = runtime.state.config.hideDissolvedTopics
+        && !runtime.state.config.pureMode
         && runtime.dissolvedSet.has(usernameOf(author));
       if (shouldHide) hideElement(result, 'topic');
       else if (result.getAttribute('data-ldd-hidden-kind') === 'topic') restoreElement(result);
@@ -1679,7 +1681,7 @@
     for (const title of titles) {
       if (title.closest('#' + UI_ID)) continue;
       const author = titleTopicAuthor(title);
-      const shouldClean = runtime.state.config.anonymousMode || (
+      const shouldClean = runtime.state.config.pureMode || (
         runtime.state.config.cleanTopicTitles
         && runtime.dissolvedSet.has(usernameOf(author))
       );
@@ -2178,6 +2180,7 @@
       #${UI_ID} .ldd-options{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
       #${UI_ID} .ldd-clean-column .ldd-options{grid-template-columns:1fr}
       #${UI_ID} .ldd-check{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer}
+      #${UI_ID} .ldd-option-note{display:block;margin:4px 0 0 22px;color:#7a8793;font-size:10px;line-height:1.45}
       #${UI_ID} .ldd-actions{display:flex;align-items:center;gap:8px;margin-top:20px;padding-top:15px;border-top:1px solid rgba(100,120,140,.18)}
       #${UI_ID} .ldd-actions button{min-height:34px;padding:7px 13px;border:0;border-radius:8px;font-size:12px;cursor:pointer}
       #${UI_ID} .ldd-save{background:#648bb2;color:#fff;font-weight:600}#${UI_ID} .ldd-reset{background:rgba(100,120,140,.12);color:inherit}#${UI_ID} .ldd-cancel{margin-left:auto;background:transparent;color:#6e7a86}
@@ -2223,6 +2226,7 @@
           <section class="ldd-section ldd-grid">
             <div class="ldd-clean-column">
               <h3>基础清洗</h3>
+              <p>处理身份、头像、装饰、签名和发帖时的假名映射。</p>
               <div class="ldd-options">
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="replaceAvatars">替换头像</label>
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="hideIdentityDecorations">清除头像框、标签和勋章</label>
@@ -2236,7 +2240,10 @@
               <div class="ldd-options">
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="hideDissolvedTopics">隐藏其发布的帖子</label>
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="cleanTopicTitles">清洗帖子标题的括号和 Emoji</label>
-                <label class="ldd-check"><input type="checkbox" data-ldd-option="anonymousMode">匿名模式</label>
+                <div>
+                  <label class="ldd-check"><input type="checkbox" data-ldd-option="pureMode">纯净模式</label>
+                  <small class="ldd-option-note">类似匿名版：溶解所有人并清洗所有标题；隐藏帖子不生效。</small>
+                </div>
               </div>
             </div>
           </section>
