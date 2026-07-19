@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.1
+// @version      0.8.2
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
@@ -1196,6 +1196,20 @@
     avatars.forEach(avatar => replaceAvatarImage(avatar, identity));
   }
 
+  function replaceBoostAvatar(bubble, identity) {
+    if (!runtime.state.config.replaceAvatars || !bubble || !identity) return;
+    const author = bubble.querySelector(':scope > a[data-user-card], :scope > a[data-username]');
+    if (!author) return;
+    setPatchedStyle(
+      author,
+      'backgroundImage',
+      'background-image',
+      'url("' + identity.avatar.replace(/"/g, '%22') + '")',
+      'important'
+    );
+    addPatchedClass(author, 'ldd-boost-avatar-host');
+  }
+
   function shouldReplaceIdentityText(element, username) {
     if (!element.matches('a, span, strong, b')) return false;
     if (element.hasAttribute('data-ldd-alias') || element.__lddOriginal?.textPatches?.some(record => record.key === 'identity')) return true;
@@ -1226,7 +1240,8 @@
     '.ldd-dissolved-avatar',
     '.ldd-neutral-avatar',
     '.ldd-neutral-avatar-host',
-    '.ldd-clear-avatar-frame'
+    '.ldd-clear-avatar-frame',
+    '.ldd-boost-avatar-host'
   ].join(',');
 
   const DECORATION_ARTIFACT_SELECTOR = [
@@ -1393,6 +1408,7 @@
       if (replaceText) replaceTextElement(element, identity, username);
       else restoreTextPatchKey(element, 'identity');
       if (hasAvatar) replaceAvatarsWithin(element, identity);
+      if (isBoostBubble) replaceBoostAvatar(element, identity);
       setTransientIdentityState(element, 'masked');
       ensureTargetedVisualObserver(targetedVisualContainer(element));
     }
@@ -2073,7 +2089,8 @@
 
       element.classList.remove(
         'ldd-dissolved-name', 'ldd-dissolved-avatar', 'ldd-cleaned-title',
-        'ldd-neutral-avatar', 'ldd-neutral-avatar-host', 'ldd-clear-avatar-frame'
+        'ldd-neutral-avatar', 'ldd-neutral-avatar-host', 'ldd-clear-avatar-frame',
+        'ldd-boost-avatar-host'
       );
       element.removeAttribute('data-ldd-alias');
       element.removeAttribute('data-ldd-avatar-alias');
@@ -2358,7 +2375,9 @@
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
       [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]),[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]){visibility:hidden!important}
-      .discourse-boosts__bubble[data-ldd-identity-state="masked"] img.avatar:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] img.user-image:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] img[data-avatar-template]:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] .avatar:not([data-ldd-avatar-alias]):not(:has([data-ldd-avatar-alias])),
+      .discourse-boosts__bubble[data-ldd-identity-state="masked"]>a:not(.ldd-boost-avatar-host){visibility:hidden!important}
+      .discourse-boosts__bubble[data-ldd-identity-state="masked"]>a.ldd-boost-avatar-host{display:inline-flex!important;width:24px!important;height:24px!important;flex:0 0 24px!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
+      .discourse-boosts__bubble[data-ldd-identity-state="masked"]>a.ldd-boost-avatar-host>img.avatar{visibility:hidden!important}
       a.reply-to-tab[data-ldd-identity-state="masked"] img.avatar:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] img.user-image:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] img[data-avatar-template]:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] .avatar:not([data-ldd-avatar-alias]):not(:has([data-ldd-avatar-alias])){visibility:hidden!important}
       [data-ldd-mutated].ldd-neutral-avatar,[data-ldd-mutated].ldd-neutral-avatar-host{border:none!important;box-shadow:none!important;outline:none!important;animation:none!important;filter:none!important;text-shadow:none!important}
       [data-ldd-mutated].ldd-neutral-avatar-host{background-color:transparent!important}
