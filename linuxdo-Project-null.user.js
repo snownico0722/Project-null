@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.0
+// @version      0.8.1
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
@@ -1357,7 +1357,10 @@
         ? element.querySelector('[data-user-card], [data-username], a[href*="/u/"]')
         : null;
       const username = normalizeUsername(
-        (boostAuthor && usernameOf(boostAuthor)) || usernameOf(element) || element.__lddBoostUsername
+        (boostAuthor && usernameOf(boostAuthor))
+        || usernameOf(element)
+        || displayNameUsername(element)
+        || element.__lddBoostUsername
       );
       if (username && isBoostBubble) element.__lddBoostUsername = username;
       if (username && element.matches('a.reply-to-tab')) element.__lddReplyUsername = username;
@@ -2354,8 +2357,7 @@
       #${HEADER_BUTTON_ID} svg{width:19px;height:19px;display:block}
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
-      [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]) img.avatar,[data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]) img.user-image,[data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]) img[data-avatar-template],[data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]) .avatar,
-      [data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]) img.avatar,[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]) img.user-image,[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]) img[data-avatar-template],[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]) .avatar,
+      [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]),[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]){visibility:hidden!important}
       .discourse-boosts__bubble[data-ldd-identity-state="masked"] img.avatar:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] img.user-image:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] img[data-avatar-template]:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] .avatar:not([data-ldd-avatar-alias]):not(:has([data-ldd-avatar-alias])),
       a.reply-to-tab[data-ldd-identity-state="masked"] img.avatar:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] img.user-image:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] img[data-avatar-template]:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] .avatar:not([data-ldd-avatar-alias]):not(:has([data-ldd-avatar-alias])){visibility:hidden!important}
       [data-ldd-mutated].ldd-neutral-avatar,[data-ldd-mutated].ldd-neutral-avatar-host{border:none!important;box-shadow:none!important;outline:none!important;animation:none!important;filter:none!important;text-shadow:none!important}
@@ -2656,6 +2658,7 @@
     listenForRemoteStateChanges();
 
     const ready = () => {
+      syncActiveMarker();
       injectUi();
       ensureHeaderButton();
       startObserver();
