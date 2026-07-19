@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.9
+// @version      0.8.10
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
 // @author       qiuqiu & ChatGPT
@@ -3002,10 +3002,12 @@
       #${UI_ID} .ldd-dialog{position:relative;width:min(560px,100%);max-height:min(760px,calc(100vh - 32px));overflow:auto;border-radius:14px;background:var(--secondary,#fff);box-shadow:0 18px 70px rgba(0,0,0,.25);outline:none}
       #${UI_ID} .ldd-head{display:flex;align-items:center;gap:10px;padding:18px 20px 15px;border-bottom:1px solid rgba(100,120,140,.18)}
       #${UI_ID} .ldd-head svg{width:25px;height:25px;color:#648bb2}
-      #${UI_ID} .ldd-head strong{font-size:20px;letter-spacing:-.3px}
+      #${UI_ID} .ldd-head-copy{min-width:0;flex:1}
+      #${UI_ID} .ldd-title-row{display:flex;align-items:center;gap:9px;min-width:0}
+      #${UI_ID} .ldd-head strong{font-size:20px;letter-spacing:0}
       #${UI_ID} .ldd-head small{display:block;margin-top:2px;color:#7d8995;font-size:11px;font-weight:400}
       #${UI_ID} .ldd-head-actions{margin-left:auto;display:flex;align-items:center;gap:10px}
-      #${UI_ID} .ldd-head-toggle{display:flex;align-items:center;gap:7px;color:#6f7c88;font-size:11px;font-weight:600}
+      #${UI_ID} .ldd-head-toggle{display:flex;align-items:center;color:#6f7c88;font-size:11px;font-weight:600}
       #${UI_ID} .ldd-close{width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:#74808c;font-size:22px;cursor:pointer}
       #${UI_ID} .ldd-close:hover{background:rgba(100,120,140,.12)}
       #${UI_ID} .ldd-body{padding:17px 20px 20px}
@@ -3013,6 +3015,9 @@
       #${UI_ID} .ldd-switch{position:relative;width:42px;height:24px;border:0;border-radius:99px;background:#b8c0c8;cursor:pointer}
       #${UI_ID} .ldd-switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);transition:transform .16s ease}
       #${UI_ID} .ldd-switch.is-on{background:#648bb2}#${UI_ID} .ldd-switch.is-on::after{transform:translateX(18px)}
+      #${UI_ID} .ldd-head-toggle .ldd-switch{width:36px;height:20px}
+      #${UI_ID} .ldd-head-toggle .ldd-switch::after{top:3px;left:3px;width:14px;height:14px}
+      #${UI_ID} .ldd-head-toggle .ldd-switch.is-on::after{transform:translateX(16px)}
       #${UI_ID} .ldd-section{margin-top:18px}
       #${UI_ID} .ldd-section h3{margin:0 0 8px;font-size:14px}
       #${UI_ID} .ldd-section p{margin:0 0 9px;color:#7a8793;font-size:11px;line-height:1.55}
@@ -3029,7 +3034,7 @@
       #${UI_ID} .ldd-option-note{display:block;margin:4px 0 0 22px;color:#7a8793;font-size:10px;line-height:1.45}
       #${UI_ID} .ldd-actions{display:flex;align-items:center;gap:8px;margin-top:20px;padding-top:15px;border-top:1px solid rgba(100,120,140,.18)}
       #${UI_ID} .ldd-actions button{min-height:34px;padding:7px 13px;border:0;border-radius:8px;font-size:12px;cursor:pointer}
-      #${UI_ID} .ldd-save{background:#648bb2;color:#fff;font-weight:600}#${UI_ID} .ldd-reset{background:rgba(100,120,140,.12);color:inherit}#${UI_ID} .ldd-cancel{margin-left:auto;background:transparent;color:#6e7a86}
+      #${UI_ID} .ldd-reset{background:rgba(100,120,140,.12);color:inherit}
       #${UI_ID} .ldd-status{margin-top:9px;min-height:16px;color:#65806d;font-size:11px}
       #${TOAST_ID}{position:fixed;z-index:100001;left:50%;bottom:28px;transform:translate(-50%,12px);padding:9px 13px;border-radius:8px;background:#26384a;color:#fff;font:12px/1.3 Arial,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 7px 24px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease}
       #${TOAST_ID}.is-visible{opacity:1;transform:translate(-50%,0)}
@@ -3049,9 +3054,14 @@
       <section class="ldd-dialog" role="dialog" aria-modal="true" aria-labelledby="ldd-title" tabindex="-1">
         <header class="ldd-head">
           ${iconSvg()}
-          <div><strong id="ldd-title">溶解计划</strong><small>比拉黑更柔和的本地身份黑名单</small></div>
+          <div class="ldd-head-copy">
+            <div class="ldd-title-row">
+              <strong id="ldd-title">溶解计划</strong>
+              <div class="ldd-head-toggle"><button type="button" class="ldd-switch" data-ldd-enabled role="switch" aria-label="启用或停用溶解" title="启用或停用溶解"></button></div>
+            </div>
+            <small>比拉黑更柔和的本地身份黑名单</small>
+          </div>
           <div class="ldd-head-actions">
-            <div class="ldd-head-toggle"><span>溶解</span><button type="button" class="ldd-switch" data-ldd-enabled role="switch" aria-label="启用或停用溶解" title="启用或停用溶解"></button></div>
             <button class="ldd-close" type="button" aria-label="关闭" data-ldd-close>×</button>
           </div>
         </header>
@@ -3096,9 +3106,7 @@
           </section>
 
           <div class="ldd-actions">
-            <button type="button" class="ldd-save" data-ldd-save>保存并应用</button>
             <button type="button" class="ldd-reset" data-ldd-reset>立即重置随机身份</button>
-            <button type="button" class="ldd-cancel" data-ldd-close>关闭</button>
           </div>
           <div class="ldd-status" data-ldd-status></div>
         </main>
@@ -3107,13 +3115,23 @@
 
     ui.addEventListener('click', event => {
       if (event.target.closest('[data-ldd-close]')) closeUi();
-      if (event.target.closest('[data-ldd-save]')) saveUi();
       if (event.target.closest('[data-ldd-reset]')) {
+        flushPendingUiSave(ui);
         resetCurrentIdentities('用户手动重置');
         showUiStatus('随机身份已重置。');
       }
       if (event.target.closest('[data-ldd-enabled]')) {
         saveUi({ toggleEnabled: true, statusMessage: '' });
+      }
+    });
+
+    ui.addEventListener('input', event => {
+      if (event.target.matches('[data-ldd-dissolved]')) scheduleUiSave(ui);
+    });
+
+    ui.addEventListener('change', event => {
+      if (event.target.matches('[data-ldd-dissolved], [data-ldd-option], input[name="ldd-mode"]')) {
+        saveUi({ statusMessage: '' });
       }
     });
 
@@ -3133,8 +3151,32 @@
     setTimeout(() => ui.querySelector('.ldd-dialog')?.focus(), 0);
   }
 
+  function clearPendingUiSave(ui) {
+    if (!ui || ui.__lddSaveTimer === null || ui.__lddSaveTimer === undefined) return;
+    clearTimeout(ui.__lddSaveTimer);
+    ui.__lddSaveTimer = null;
+  }
+
+  function scheduleUiSave(ui) {
+    if (!ui) return;
+    clearPendingUiSave(ui);
+    ui.__lddSaveTimer = setTimeout(() => {
+      ui.__lddSaveTimer = null;
+      if (ui.isConnected && ui.classList.contains('is-open')) saveUi({ statusMessage: '' });
+    }, 350);
+  }
+
+  function flushPendingUiSave(ui) {
+    if (!ui || ui.__lddSaveTimer === null || ui.__lddSaveTimer === undefined) return;
+    clearPendingUiSave(ui);
+    saveUi({ statusMessage: '' });
+  }
+
   function closeUi() {
-    document.getElementById(UI_ID)?.classList.remove('is-open');
+    const ui = document.getElementById(UI_ID);
+    if (!ui) return;
+    flushPendingUiSave(ui);
+    ui.classList.remove('is-open');
   }
 
   function renderUi() {
@@ -3169,6 +3211,7 @@
   function saveUi(options = {}) {
     const ui = document.getElementById(UI_ID);
     if (!ui) return;
+    clearPendingUiSave(ui);
     const previousMode = runtime.state.config.resetMode;
     const draft = readUiDraft(ui);
     runtime.state.config = draft.config;
@@ -3193,7 +3236,7 @@
     restoreAll();
     if (runtime.state.config.enabled) queueScan(document);
     renderUi();
-    const message = options.statusMessage === undefined ? '已保存并应用。' : options.statusMessage;
+    const message = options.statusMessage || '';
     if (message) showUiStatus(message);
   }
 
