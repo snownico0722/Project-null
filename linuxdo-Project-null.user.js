@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.8
+// @version      0.8.9
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
 // @author       qiuqiu & ChatGPT
@@ -821,6 +821,13 @@
     );
   }
 
+  function composerRichEditorFrom(target) {
+    const selector = '.ProseMirror[contenteditable="true"], [contenteditable="true"].d-editor-input';
+    const direct = target?.closest?.(selector);
+    if (direct) return direct;
+    return composerRootFrom(target)?.querySelector(selector) || null;
+  }
+
   function composerAliasSnapshot(editor) {
     if (!editor) return null;
     const currentScope = scopeFor(editor);
@@ -866,18 +873,17 @@
     const focusedEditor = composerEditorFrom(document.activeElement);
     const editor = focusedEditor || (runtime.activeComposerEditor?.isConnected ? runtime.activeComposerEditor : null);
     const root = composerRootFrom(editor || document.activeElement);
-    if (!root || (!editor && !root.querySelector('.ProseMirror[contenteditable="true"], [contenteditable="true"].d-editor-input'))) {
-      return null;
-    }
-    return { editor, root };
+    const richEditor = editor ? null : composerRichEditorFrom(document.activeElement || root);
+    if (!root || (!editor && !richEditor)) return null;
+    return { editor, richEditor, root };
   }
 
   function aliasSearchCandidate(source, alias, username, scopeTarget) {
     const identity = identityFor(username, scopeTarget);
     return {
       ...(source || {}),
-      username,
-      name: alias,
+      username: alias,
+      name: '',
       title: alias,
       description: '',
       status: null,
@@ -959,6 +965,68 @@
     return { index, options, term };
   }
 
+  function composerPostRequestDetails(args) {
+    const first = args[0];
+    const second = args[1];
+    const url = typeof first === 'string' ? first : first?.url;
+    if (!url) return null;
+    let pathname = '';
+    try { pathname = new URL(String(url), location.href).pathname; } catch (_) { return null; }
+    if (!/\/posts(?:\/\d+)?(?:\.json)?\/?$/i.test(pathname)) return null;
+    const index = typeof first === 'string' ? 1 : 0;
+    const options = index === 1 ? second : first;
+    if (!options || typeof options !== 'object') return null;
+    const data = options.data;
+    if (typeof data === 'string') {
+      try {
+        const parsed = JSON.parse(data);
+        if (typeof parsed?.raw === 'string') {
+          return { index, options, raw: parsed.raw, kind: 'json', parsed };
+        }
+      } catch (_) {}
+      return null;
+    }
+    if (!data || typeof data !== 'object' || typeof data.raw !== 'string') return null;
+    return { index, options, raw: data.raw, kind: 'object' };
+  }
+
+  function mapComposerPostRaw(root, raw) {
+    if (
+      !root?.isConnected
+      || !runtime.state.config.enabled
+      || !runtime.state.config.mapAliasMentions
+      || !raw
+    ) return raw;
+    const editor = composerEditorFrom(root);
+    const richEditor = editor ? null : composerRichEditorFrom(root);
+    const reverseMap = editor
+      ? mergedComposerAliasMap(editor)
+      : exposedAliasReverseMap(scopeFor(richEditor || root));
+    const stateKey = editor || richEditor || root;
+    const state = runtime.composerMentionChoices.get(stateKey);
+    let looseProtection = { text: raw, restore: text => text };
+    if (state?.kind === 'loose') {
+      for (const choice of state.choices) {
+        if (!choice.alias || !choice.username) continue;
+        if (choice.action === 'map') reverseMap.set(choice.alias, choice.username);
+      }
+      looseProtection = protectLooseComposerChoices(raw, state.choices);
+    } else if (state?.ranges) {
+      for (const choice of state.ranges) {
+        if (choice.action === 'map' && choice.alias && choice.username) {
+          reverseMap.set(choice.alias, choice.username);
+        }
+      }
+    }
+    const protectedChoices = editor && editor.value === raw
+      ? protectRealAliasChoices(editor, raw)
+      : looseProtection;
+    const result = mapAliasMentionsInMarkdown(protectedChoices.text, reverseMap);
+    const mapped = protectedChoices.restore(result.text);
+    runtime.composerMentionChoices.delete(stateKey);
+    return mapped;
+  }
+
   function installUserSearchHook() {
     if (runtime.ajaxHooked || runtime.ajaxHookTimer) return;
     let attempts = 0;
@@ -978,7 +1046,22 @@
       const hookedAjax = function () {
         const args = Array.from(arguments);
         const details = userSearchRequestDetails(args);
-        if (!details) return originalAjax.apply(this, args);
+        const postDetails = details ? null : composerPostRequestDetails(args);
+        if (!details && !postDetails) return originalAjax.apply(this, args);
+        if (postDetails) {
+          const root = activeComposerContext()?.root || runtime.activeComposerRoot;
+          const mappedRaw = mapComposerPostRaw(root, postDetails.raw);
+          if (mappedRaw !== postDetails.raw) {
+            const data = postDetails.kind === 'json'
+              ? JSON.stringify({ ...postDetails.parsed, raw: mappedRaw })
+              : { ...postDetails.options.data, raw: mappedRaw };
+            args[postDetails.index] = {
+              ...postDetails.options,
+              data
+            };
+          }
+          return originalAjax.apply(this, args);
+        }
         const originalSuccess = details.options.success;
         const options = {
           ...details.options,
@@ -1087,19 +1170,125 @@
     return best;
   }
 
-  function rememberRealAliasChoice(editor, alias, fallbackCaret) {
+  function rememberComposerAliasChoice(editor, alias, username, action, fallbackCaret) {
     const value = String(editor?.value || '');
     let state = updateComposerMentionChoices(editor);
     if (!state) state = { value, ranges: [] };
     const range = aliasMentionRangeNearCaret(editor, alias, fallbackCaret);
     if (!range) return false;
-    if (!state.ranges.some(item => item.start === range.start && item.end === range.end)) {
-      state.ranges.push({ alias, start: range.start, end: range.end });
+    const existing = state.ranges.find(item => item.start === range.start && item.end === range.end);
+    if (existing) {
+      existing.alias = alias;
+      existing.username = username;
+      existing.action = action;
+    } else {
+      state.ranges.push({ alias, username, action, start: range.start, end: range.end });
       state.ranges.sort((left, right) => left.start - right.start);
     }
     state.value = value;
     runtime.composerMentionChoices.set(editor, state);
     return true;
+  }
+
+  function composerCaretTextOffset(root) {
+    try {
+      const selection = window.getSelection?.();
+      if (!selection?.rangeCount || !root.contains(selection.anchorNode)) return null;
+      const range = selection.getRangeAt(0).cloneRange();
+      range.selectNodeContents(root);
+      range.setEnd(selection.anchorNode, selection.anchorOffset);
+      return range.toString().length;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function looseMentionOrdinal(root, alias, preferredCaret) {
+    const text = String(root?.textContent || '');
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp('(^|[^A-Za-z0-9_.-])@' + escaped + '(?![A-Za-z0-9_.-])', 'gi');
+    const caret = Number.isFinite(preferredCaret)
+      ? preferredCaret
+      : composerCaretTextOffset(root);
+    let ordinal = 0;
+    let last = -1;
+    let match;
+    while ((match = pattern.exec(text))) {
+      const start = match.index + match[1].length;
+      const end = start + match[0].length - match[1].length;
+      last = ordinal;
+      if (Number.isFinite(caret) && caret >= start && caret <= end + 1) return ordinal;
+      if (Number.isFinite(caret) && end > caret) break;
+      ordinal++;
+    }
+    return last >= 0 ? last : null;
+  }
+
+  function rememberLooseComposerAliasChoice(root, alias, username, action, preferredCaret) {
+    if (!root) return;
+    let state = runtime.composerMentionChoices.get(root);
+    if (!state || state.kind !== 'loose') {
+      state = { kind: 'loose', choices: [] };
+    }
+    const ordinal = looseMentionOrdinal(root, alias, preferredCaret);
+    const existing = state.choices.find(item =>
+      item.alias === alias && item.action === action && item.ordinal === ordinal
+    );
+    if (!existing) state.choices.push({ alias, username, action, ordinal });
+    runtime.composerMentionChoices.set(root, state);
+  }
+
+  function protectLooseComposerChoices(value, choices) {
+    const keepByAlias = new Map();
+    for (const choice of choices || []) {
+      if (choice.action !== 'keep' || !choice.alias) continue;
+      let ordinals = keepByAlias.get(choice.alias);
+      if (!ordinals) {
+        ordinals = new Set();
+        keepByAlias.set(choice.alias, ordinals);
+      }
+      ordinals.add(choice.ordinal);
+    }
+    if (!keepByAlias.size) return { text: value, restore: text => text };
+
+    const ranges = [];
+    for (const [alias, ordinals] of keepByAlias) {
+      const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = new RegExp('(^|[^A-Za-z0-9_.-])@' + escaped + '(?![A-Za-z0-9_.-])', 'gi');
+      const matches = [];
+      let match;
+      while ((match = pattern.exec(value))) {
+        const start = match.index + match[1].length;
+        const end = start + match[0].length - match[1].length;
+        matches.push({ start, end, mention: value.slice(start, end) });
+      }
+      const selected = new Set();
+      for (const ordinal of ordinals) {
+        const index = Number.isInteger(ordinal) && ordinal >= 0 && ordinal < matches.length
+          ? ordinal
+          : matches.length - 1;
+        if (index >= 0 && !selected.has(index)) {
+          selected.add(index);
+          ranges.push(matches[index]);
+        }
+      }
+    }
+    ranges.sort((left, right) => right.start - left.start);
+    let text = value;
+    const replacements = [];
+    ranges.forEach((range, index) => {
+      const marker = '\uE100ldd-loose-' + index + '\uE101';
+      text = text.slice(0, range.start) + marker + text.slice(range.end);
+      replacements.push([marker, range.mention]);
+    });
+    return {
+      text,
+      restore(mapped) {
+        let restored = mapped;
+        for (const [marker, mention] of replacements) restored = restored.split(marker).join(mention);
+        return restored;
+      }
+    };
   }
 
   function protectRealAliasChoices(editor, value) {
@@ -1112,6 +1301,7 @@
     const ranges = state.ranges.slice().sort((left, right) => right.start - left.start);
     for (let index = 0; index < ranges.length; index++) {
       const range = ranges[index];
+      if (range.action !== 'keep') continue;
       const mention = value.slice(range.start, range.end);
       if (mention.toLowerCase() !== '@' + range.alias) continue;
       const marker = '\uE100ldd-real-' + index + '\uE101';
@@ -1130,34 +1320,52 @@
 
   function scheduleAutocompleteMentionChoice(candidate) {
     const context = activeComposerContext();
-    const editor = context?.editor;
-    if (!editor || !candidate?.classList.contains('ldd-real-alias-candidate')) return;
+    if (!context || !candidate) return;
+    const editor = context.editor;
+    const richEditor = context.richEditor;
+    const isAliasCandidate = candidate.classList.contains('ldd-alias-candidate');
+    const isRealCandidate = candidate.classList.contains('ldd-real-alias-candidate');
+    if (!isAliasCandidate && !isRealCandidate) return;
     const alias = autocompleteCandidateAlias(candidate);
-    const username = mergedComposerAliasMap(editor).get(alias);
+    const reverseMap = editor
+      ? mergedComposerAliasMap(editor)
+      : exposedAliasReverseMap(scopeFor(richEditor || context.root));
+    const username = reverseMap.get(alias);
     if (!alias || !username) return;
+    const action = isAliasCandidate ? 'map' : 'keep';
+    if (!editor) {
+      const choiceTarget = richEditor || context.root;
+      const captured = candidate.__lddComposerCaret;
+      const preferredCaret = captured?.target === choiceTarget
+        ? captured.offset
+        : composerCaretTextOffset(choiceTarget);
+      delete candidate.__lddComposerCaret;
+      setTimeout(() => {
+        if (choiceTarget.isConnected) {
+          rememberLooseComposerAliasChoice(
+            choiceTarget,
+            alias,
+            username,
+            action,
+            preferredCaret
+          );
+        }
+      }, 0);
+      return;
+    }
     const previousCaret = editor.selectionStart;
     const settle = attempt => {
       if (!editor.isConnected) return;
-      if (rememberRealAliasChoice(editor, alias, previousCaret)) return;
+      if (rememberComposerAliasChoice(
+        editor,
+        alias,
+        username,
+        action,
+        previousCaret
+      )) return;
       if (attempt < 4) setTimeout(() => settle(attempt + 1), 20);
     };
     setTimeout(() => settle(0), 0);
-  }
-
-  function setComposerText(editor, value) {
-    const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-    if (descriptor?.set) descriptor.set.call(editor, value);
-    else editor.value = value;
-    try {
-      editor.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        inputType: 'insertReplacementText',
-        data: null
-      }));
-    } catch (_) {
-      editor.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    editor.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function mapComposerAliasMentions(target) {
@@ -1166,12 +1374,12 @@
     if (!editor || editor.closest('#' + UI_ID)) return 0;
     const originalText = editor.value;
     const reverseMap = mergedComposerAliasMap(editor);
+    const choiceState = updateComposerMentionChoices(editor);
+    choiceState?.ranges
+      .filter(range => range.action === 'map' && range.alias && range.username)
+      .forEach(range => reverseMap.set(range.alias, range.username));
     const protectedChoices = protectRealAliasChoices(editor, originalText);
     const result = mapAliasMentionsInMarkdown(protectedChoices.text, reverseMap);
-    const mappedText = protectedChoices.restore(result.text);
-    if (mappedText !== originalText) setComposerText(editor, mappedText);
-    runtime.composerMentionChoices.delete(editor);
-    if (!result.mappings.length || mappedText === originalText) return 0;
     return result.mappings.length;
   }
 
@@ -1191,9 +1399,23 @@
       if (editor) updateComposerMentionChoices(editor);
     }, true);
 
+    document.addEventListener('pointerdown', event => {
+      const candidate = event.target?.closest?.(
+        '.autocomplete.ac-user a.ldd-alias-candidate, .autocomplete.ac-user a.ldd-real-alias-candidate'
+      );
+      const context = candidate && activeComposerContext();
+      if (candidate && context && !context.editor) {
+        const choiceTarget = context.richEditor || context.root;
+        candidate.__lddComposerCaret = {
+          target: choiceTarget,
+          offset: composerCaretTextOffset(choiceTarget)
+        };
+      }
+    }, true);
+
     document.addEventListener('click', event => {
       const candidate = event.target?.closest?.(
-        '.autocomplete.ac-user a.ldd-real-alias-candidate'
+        '.autocomplete.ac-user a.ldd-alias-candidate, .autocomplete.ac-user a.ldd-real-alias-candidate'
       );
       if (candidate) scheduleAutocompleteMentionChoice(candidate);
       const submit = event.target?.closest?.(
@@ -1205,7 +1427,7 @@
     document.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === 'Tab') {
         const candidate = document.querySelector(
-          '.autocomplete.ac-user a.selected.ldd-real-alias-candidate'
+          '.autocomplete.ac-user a.selected.ldd-alias-candidate, .autocomplete.ac-user a.selected.ldd-real-alias-candidate'
         );
         if (candidate) scheduleAutocompleteMentionChoice(candidate);
       }
@@ -2756,8 +2978,6 @@
       #${HEADER_BUTTON_ID} svg{width:19px;height:19px;display:block}
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
-      .autocomplete.ac-user a.ldd-alias-candidate .username{display:none!important}
-      .autocomplete.ac-user a.ldd-alias-candidate .name{display:block!important;color:inherit!important;font-size:inherit!important}
       .autocomplete.ac-user a.ldd-alias-candidate img.avatar{pointer-events:none!important}
       [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state])>img.avatar{visibility:hidden!important}
       [data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state])>a>img.avatar{visibility:hidden!important}
