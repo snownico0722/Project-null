@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.7.2
-// @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与需确认的 @ 假名反向映射。
+// @version      0.7.3
+// @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
 // @match        https://www.linux.do/*
@@ -746,15 +746,7 @@
     const originalText = editor.value;
     const result = mapAliasMentionsInMarkdown(originalText, mergedComposerAliasMap(editor));
     if (!result.mappings.length || result.text === originalText) return 0;
-    const lines = result.mappings.map(item => '@' + item.alias + ' → @' + item.username);
-    const confirmed = globalThis.confirm(
-      '即将把以下溶解身份映射为真实用户名：\n\n'
-      + lines.join('\n')
-      + '\n\n确认后再发送。若你想 @ 同名真实用户，请取消并使用 @@用户名。'
-    );
-    if (!confirmed) return -1;
     setComposerText(editor, result.text);
-    showToast('已映射 ' + result.mappings.length + ' 个溶解身份');
     return result.mappings.length;
   }
 
@@ -768,30 +760,18 @@
       const submit = event.target?.closest?.(
         '#reply-control button.create, #reply-control .create, #reply-control button[type="submit"], .composer button.create'
       );
-      if (submit && mapComposerAliasMentions(submit) < 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-      }
+      if (submit) mapComposerAliasMentions(submit);
     }, true);
 
     document.addEventListener('keydown', event => {
       if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
       const editor = composerEditorFrom(event.target);
-      if (editor && mapComposerAliasMentions(editor) < 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-      }
+      if (editor) mapComposerAliasMentions(editor);
     }, true);
 
     document.addEventListener('submit', event => {
       const editor = composerEditorFrom(event.target);
-      if (editor && mapComposerAliasMentions(editor) < 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-      }
+      if (editor) mapComposerAliasMentions(editor);
     }, true);
   }
 
@@ -2164,12 +2144,12 @@
           <section class="ldd-section ldd-grid">
             <div class="ldd-clean-column">
               <h3>基础清洗</h3>
-              <p>处理用户自身的身份标记；发送前只会处理当前页面实际出现过的 @假名，并逐次显示真实用户名要求确认。写 \\@假名可作为普通文字；写 @@用户名可绕过映射并按真实用户名发送。</p>
+              <p>处理用户自身的身份标记；发送时只会自动映射当前页面实际出现过的 @假名，普通 @用户名保持不变。写 \\@假名可作为普通文字；写 @@用户名可绕过映射并按真实用户名发送。</p>
               <div class="ldd-options">
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="replaceAvatars">替换头像</label>
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="hideIdentityDecorations">清除头像框、标签和勋章</label>
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="hideSignatures">隐藏签名档</label>
-                <label class="ldd-check"><input type="checkbox" data-ldd-option="mapAliasMentions">发送前确认并映射 @随机名</label>
+                <label class="ldd-check"><input type="checkbox" data-ldd-option="mapAliasMentions">发送时自动映射 @随机名</label>
               </div>
             </div>
             <div class="ldd-clean-column">
