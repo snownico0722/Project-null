@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.7.1
+// @version      0.7.2
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与需确认的 @ 假名反向映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
@@ -2034,8 +2034,24 @@
     return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.4c2.9 4.1 6.7 7.5 6.7 12A6.7 6.7 0 1 1 5.3 14.4c0-4.5 3.8-7.9 6.7-12Zm0 5.1c-1.7 2.5-3.8 4.7-3.8 7a3.8 3.8 0 0 0 7.6 0c0-2.3-2.1-4.5-3.8-7Z"/></svg>';
   }
 
+  function updateHeaderButtonState() {
+    const button = document.getElementById(HEADER_BUTTON_ID);
+    if (!button) return;
+    const enabled = runtime.state.config.enabled;
+    button.classList.toggle('is-enabled', enabled);
+    button.classList.toggle('is-disabled', !enabled);
+    button.dataset.enabled = String(enabled);
+    const label = enabled ? '溶解计划已启用，点击打开设置' : '溶解计划已停用，点击打开设置';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  }
+
   function ensureHeaderButton() {
-    if (!document.body || document.getElementById(HEADER_BUTTON_ID)) return;
+    if (!document.body) return;
+    if (document.getElementById(HEADER_BUTTON_ID)) {
+      updateHeaderButtonState();
+      return;
+    }
     const host = document.querySelector(
       '#site-header .header-icons, #site-header .header-buttons, .d-header .header-icons, .d-header .header-buttons'
     );
@@ -2043,12 +2059,11 @@
     const button = document.createElement('button');
     button.id = HEADER_BUTTON_ID;
     button.type = 'button';
-    button.title = '打开溶解计划';
-    button.setAttribute('aria-label', '打开溶解计划');
     button.innerHTML = iconSvg();
     button.addEventListener('click', openUi);
     const userMenu = host.querySelector('.current-user, .user-menu, [data-user-card]');
     host.insertBefore(button, userMenu || null);
+    updateHeaderButtonState();
   }
 
   function injectStyle() {
@@ -2056,8 +2071,13 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      #${HEADER_BUTTON_ID}{display:inline-flex!important;align-items:center;justify-content:center;box-sizing:border-box;width:30px!important;min-width:30px!important;height:30px!important;margin:0 2px!important;padding:0!important;border:0!important;border-radius:8px;background:transparent!important;color:#648bb2;cursor:pointer;overflow:hidden}
-      #${HEADER_BUTTON_ID}:hover{background:rgba(100,139,178,.11)!important;color:#4d759e}
+      #${HEADER_BUTTON_ID}{position:relative;display:inline-flex!important;align-items:center;justify-content:center;box-sizing:border-box;width:30px!important;min-width:30px!important;height:30px!important;margin:0 2px!important;padding:0!important;border:0!important;border-radius:8px;background:transparent!important;cursor:pointer;overflow:hidden}
+      #${HEADER_BUTTON_ID}.is-enabled{background:rgba(100,139,178,.09)!important;color:#4d759e}
+      #${HEADER_BUTTON_ID}.is-enabled:hover{background:rgba(100,139,178,.17)!important;color:#365f87}
+      #${HEADER_BUTTON_ID}.is-enabled::after{content:"";position:absolute;right:3px;bottom:3px;width:5px;height:5px;border-radius:50%;background:#2f9e67;box-shadow:0 0 0 1px var(--header_background,var(--secondary,#fff))}
+      #${HEADER_BUTTON_ID}.is-disabled{background:rgba(120,128,136,.08)!important;color:#8c949c}
+      #${HEADER_BUTTON_ID}.is-disabled:hover{background:rgba(120,128,136,.15)!important;color:#697179}
+      #${HEADER_BUTTON_ID}.is-disabled::after{content:"";position:absolute;width:23px;height:2px;border-radius:1px;background:#c95d5d;transform:rotate(-45deg);box-shadow:0 0 0 1px var(--header_background,var(--secondary,#fff))}
       #${HEADER_BUTTON_ID} svg{width:19px;height:19px;display:block}
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
@@ -2205,6 +2225,7 @@
   }
 
   function renderUi() {
+    updateHeaderButtonState();
     const ui = document.getElementById(UI_ID);
     if (!ui) return;
     const config = runtime.state.config;
@@ -2307,6 +2328,7 @@
   }
 
   function updateEnabledUiOnly() {
+    updateHeaderButtonState();
     const ui = document.getElementById(UI_ID);
     const enabled = ui?.querySelector('[data-ldd-enabled]');
     if (!enabled) return;
