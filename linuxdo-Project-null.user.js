@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.7.3
+// @version      0.7.4
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
@@ -46,7 +46,8 @@
     hideSignatures: true,
     mapAliasMentions: true,
     hideDissolvedTopics: true,
-    cleanTopicTitles: true
+    cleanTopicTitles: true,
+    anonymousMode: false
   });
 
   const ALIAS_WORDS = Object.freeze([
@@ -132,6 +133,7 @@
     scopeAliasMaps: new Map(),
     composerMentionSnapshots: new WeakMap(),
     exposedAliases: new Map(),
+    visibleRealUsernames: new Map(),
     userCardContext: null,
     pageGeneration: 0,
     lastLocation: location.href,
@@ -194,7 +196,8 @@
         hideDissolvedTopics: typeof config.hideDissolvedTopics === 'boolean'
           ? config.hideDissolvedTopics
           : true,
-        cleanTopicTitles
+        cleanTopicTitles,
+        anonymousMode: config.anonymousMode === true
       },
       dissolvedUsers: uniqueUsernames(state.dissolvedUsers),
       secret: typeof state.secret === 'string' && state.secret.length >= 12
@@ -273,6 +276,7 @@
     runtime.aliasCache.clear();
     runtime.scopeAliasMaps.clear();
     runtime.exposedAliases.clear();
+    runtime.visibleRealUsernames.clear();
     runtime.composerMentionSnapshots = new WeakMap();
     runtime.identityRevision++;
   }
@@ -359,6 +363,22 @@
   function isDissolvedProfileDestination(destination) {
     const username = profileUsernameFromDestination(destination);
     return Boolean(username && runtime.dissolvedSet.has(username));
+  }
+
+  function shouldAnonymizeUsername(username) {
+    return Boolean(
+      username
+      && (runtime.state.config.anonymousMode || runtime.dissolvedSet.has(username))
+    );
+  }
+
+  function anonymizedUsernames() {
+    if (!runtime.state.config.anonymousMode) return runtime.dissolvedSet;
+    const usernames = new Set(runtime.dissolvedSet);
+    for (const names of runtime.visibleRealUsernames.values()) {
+      names.forEach(username => usernames.add(username));
+    }
+    return usernames;
   }
 
   function usernameOf(element) {
@@ -504,8 +524,9 @@
       runtime.scopeAliasMaps.delete(scope);
       runtime.scopeAliasMaps.set(scope, aliases);
     }
+    if (!aliases.has(username)) assignScopeAlias(aliases, scope, username);
     pruneScopeAliasCache();
-    return aliases.get(username) || fallbackWordAlias(scope, username);
+    return aliases.get(username);
   }
 
   function pruneScopeAliasCache() {
@@ -513,6 +534,7 @@
       const oldestScope = runtime.scopeAliasMaps.keys().next().value;
       runtime.scopeAliasMaps.delete(oldestScope);
       runtime.exposedAliases.delete(oldestScope);
+      runtime.visibleRealUsernames.delete(oldestScope);
       const prefix = oldestScope + '|';
       for (const key of Array.from(runtime.aliasCache.keys())) {
         if (key.startsWith(prefix)) runtime.aliasCache.delete(key);
@@ -522,41 +544,46 @@
 
   function buildScopeAliasMap(scope) {
     const aliases = new Map();
-    const usedWords = new Set();
-    const modeSalt = runtime.state.config.resetMode === 'topic' ? runtime.state.topicSalt : '';
-    const usernames = Array.from(runtime.dissolvedSet).sort();
-    const reservedUsernames = new Set(usernames);
-
-    for (const username of usernames) {
-      const [first, second] = hashPair(runtime.state.secret + '|' + modeSalt + '|' + scope + '|' + username + '|word');
-      const preferredLength = 5 + (first % 5);
-      const lengthOrder = Array.from({ length: 5 }, (_, offset) => 5 + ((preferredLength - 5 + offset) % 5));
-      let selected = '';
-
-      for (const length of lengthOrder) {
-        const bucket = ALIAS_WORDS_BY_LENGTH[length];
-        if (!bucket.length) continue;
-        const bucketSeed = fnv1a(second + '|' + first + '|' + length + '|' + username);
-        let step = 1 + (bucketSeed % Math.max(1, bucket.length - 1));
-        while (bucket.length > 1 && greatestCommonDivisor(step, bucket.length) !== 1) {
-          step = (step % (bucket.length - 1)) + 1;
-        }
-        const startIndex = (first ^ bucketSeed) % bucket.length;
-
-        for (let attempt = 0; attempt < bucket.length; attempt++) {
-          const candidate = bucket[(startIndex + attempt * step) % bucket.length];
-          if (usedWords.has(candidate) || reservedUsernames.has(candidate)) continue;
-          selected = candidate;
-          break;
-        }
-        if (selected) break;
-      }
-
-      if (!selected) selected = fallbackWordAlias(scope, username);
-      aliases.set(username, selected);
-      usedWords.add(selected);
+    for (const username of Array.from(runtime.dissolvedSet).sort()) {
+      assignScopeAlias(aliases, scope, username);
     }
     return aliases;
+  }
+
+  function assignScopeAlias(aliases, scope, username) {
+    if (aliases.has(username)) return aliases.get(username);
+    const usedWords = new Set(aliases.values());
+    const modeSalt = runtime.state.config.resetMode === 'topic' ? runtime.state.topicSalt : '';
+    const reservedUsernames = new Set(runtime.dissolvedSet);
+    const visibleNames = runtime.visibleRealUsernames.get(scope);
+    visibleNames?.forEach(value => reservedUsernames.add(value));
+    const [first, second] = hashPair(runtime.state.secret + '|' + modeSalt + '|' + scope + '|' + username + '|word');
+    const preferredLength = 5 + (first % 5);
+    const lengthOrder = Array.from({ length: 5 }, (_, offset) => 5 + ((preferredLength - 5 + offset) % 5));
+    let selected = '';
+
+    for (const length of lengthOrder) {
+      const bucket = ALIAS_WORDS_BY_LENGTH[length];
+      if (!bucket.length) continue;
+      const bucketSeed = fnv1a(second + '|' + first + '|' + length + '|' + username);
+      let step = 1 + (bucketSeed % Math.max(1, bucket.length - 1));
+      while (bucket.length > 1 && greatestCommonDivisor(step, bucket.length) !== 1) {
+        step = (step % (bucket.length - 1)) + 1;
+      }
+      const startIndex = (first ^ bucketSeed) % bucket.length;
+
+      for (let attempt = 0; attempt < bucket.length; attempt++) {
+        const candidate = bucket[(startIndex + attempt * step) % bucket.length];
+        if (usedWords.has(candidate) || reservedUsernames.has(candidate)) continue;
+        selected = candidate;
+        break;
+      }
+      if (selected) break;
+    }
+
+    if (!selected) selected = fallbackWordAlias(scope, username);
+    aliases.set(username, selected);
+    return selected;
   }
 
   function fallbackWordAlias(scope, username) {
@@ -590,6 +617,21 @@
     const alias = identity.alias.toLowerCase();
     if (reverse.has(alias) && reverse.get(alias) !== username) reverse.set(alias, '');
     else if (!reverse.has(alias)) reverse.set(alias, username);
+  }
+
+  function recordVisibleRealUsername(username, element) {
+    if (!username || !isActuallyExposed(element)) return;
+    const scope = scopeFor(element);
+    let names = runtime.visibleRealUsernames.get(scope);
+    if (!names) {
+      names = new Set();
+      runtime.visibleRealUsernames.set(scope, names);
+    }
+    names.add(username);
+  }
+
+  function visibleRealUsernameSet(scope) {
+    return new Set(runtime.visibleRealUsernames.get(scope) || []);
   }
 
   function exposedAliasReverseMap(scope) {
@@ -700,7 +742,8 @@
     const snapshot = {
       scope: currentScope,
       revision: runtime.identityRevision,
-      reverseMap: exposedAliasReverseMap(currentScope)
+      reverseMap: exposedAliasReverseMap(currentScope),
+      realUsernames: visibleRealUsernameSet(currentScope)
     };
     runtime.composerMentionSnapshots.set(editor, snapshot);
     return snapshot;
@@ -720,6 +763,14 @@
       merged.set(alias, username);
     }
     for (const alias of ambiguous) merged.delete(alias);
+    return merged;
+  }
+
+  function mergedComposerRealUsernames(editor) {
+    const snapshot = composerAliasSnapshot(editor);
+    const currentScope = scopeFor(editor);
+    const merged = new Set(snapshot?.realUsernames || []);
+    visibleRealUsernameSet(currentScope).forEach(username => merged.add(username));
     return merged;
   }
 
@@ -744,8 +795,29 @@
     const editor = composerEditorFrom(target);
     if (!editor || editor.closest('#' + UI_ID)) return 0;
     const originalText = editor.value;
-    const result = mapAliasMentionsInMarkdown(originalText, mergedComposerAliasMap(editor));
+    const reverseMap = mergedComposerAliasMap(editor);
+    let result = mapAliasMentionsInMarkdown(originalText, reverseMap);
     if (!result.mappings.length || result.text === originalText) return 0;
+
+    const realUsernames = mergedComposerRealUsernames(editor);
+    const keepRealUsernames = new Set();
+    for (const mapping of result.mappings) {
+      if (!realUsernames.has(mapping.alias) || mapping.alias === mapping.username) continue;
+      const chooseDissolved = globalThis.confirm(
+        '检测到 @' + mapping.alias + ' 同时对应两个用户：\n\n'
+        + '溶解身份：@' + mapping.username + '\n'
+        + '真实同名用户：@' + mapping.alias + '\n\n'
+        + '点击“确定”选择溶解身份；点击“取消”保留真实同名用户。'
+      );
+      if (!chooseDissolved) keepRealUsernames.add(mapping.alias);
+    }
+
+    if (keepRealUsernames.size) {
+      const selectedMap = new Map(reverseMap);
+      keepRealUsernames.forEach(alias => selectedMap.delete(alias));
+      result = mapAliasMentionsInMarkdown(originalText, selectedMap);
+    }
+    if (result.text === originalText) return 0;
     setComposerText(editor, result.text);
     return result.mappings.length;
   }
@@ -1174,13 +1246,13 @@
     if (!container?.isConnected) return false;
     if (container.matches('.user-card, #user-card')) {
       const profile = container.querySelector('a[data-user-card], a[href^="/u/"], [data-username]');
-      return runtime.dissolvedSet.has(usernameOf(profile));
+      return shouldAnonymizeUsername(usernameOf(profile));
     }
     if (container.matches('article[data-post-id], .topic-post')) {
       const article = container.matches('article[data-post-id]')
         ? container
         : container.querySelector('article[data-post-id]') || container;
-      return runtime.dissolvedSet.has(usernameOf(postAuthor(article)));
+      return shouldAnonymizeUsername(usernameOf(postAuthor(article)));
     }
     return false;
   }
@@ -1204,7 +1276,8 @@
 
     for (const element of elements) {
       const username = usernameOf(element);
-      if (!runtime.dissolvedSet.has(username)) {
+      recordVisibleRealUsername(username, element);
+      if (!shouldAnonymizeUsername(username)) {
         restoreIdentityNeighborhood(element);
         continue;
       }
@@ -1230,7 +1303,7 @@
   }
 
   function escapedUsernamePattern() {
-    const names = Array.from(runtime.dissolvedSet)
+    const names = Array.from(anonymizedUsernames())
       .filter(Boolean)
       .sort((a, b) => b.length - a.length)
       .map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
@@ -1256,7 +1329,7 @@
     let changed = false;
     const replaced = text.replace(regex, (whole, prefix, rawUsername) => {
       const username = normalizeUsername(rawUsername);
-      if (!runtime.dissolvedSet.has(username)) return whole;
+      if (!shouldAnonymizeUsername(username)) return whole;
       const identity = identityFor(username, owner);
       changed = true;
       markTriggered(owner);
@@ -1269,7 +1342,7 @@
   }
 
   function scanPlainMentions(root) {
-    if (!runtime.dissolvedSet.size) return;
+    if (!runtime.dissolvedSet.size && !runtime.state.config.anonymousMode) return;
     const roots = new Set(collect(root, [
       '.cooked', '.excerpt', '.topic-excerpt', '.fps-result', '.search-result',
       '.user-stream-item', '.activity-stream .item', '.bookmark-list-item'
@@ -1297,7 +1370,7 @@
       const username = normalizeUsername(quote.getAttribute('data-username'));
       const title = quote.querySelector('.title');
       if (!title) continue;
-      if (!runtime.dissolvedSet.has(username)) {
+      if (!shouldAnonymizeUsername(username)) {
         restoreTextPatchKey(title, 'quote-author');
         title.removeAttribute('data-ldd-alias');
         title.classList.remove('ldd-dissolved-name');
@@ -1419,7 +1492,7 @@
     const carriers = collect(root, '[data-user-card], [data-username], a[href*="/u/"]');
     for (const carrier of carriers) {
       const username = usernameOf(carrier);
-      if (!runtime.state.config.hideIdentityDecorations || !runtime.dissolvedSet.has(username)) {
+      if (!runtime.state.config.hideIdentityDecorations || !shouldAnonymizeUsername(username)) {
         restoreIdentityNeighborhood(carrier);
         continue;
       }
@@ -1435,7 +1508,7 @@
     for (const post of collect(root, 'article[data-post-id]')) {
       const username = usernameOf(postAuthor(post));
       const container = post.closest('.topic-post') || post;
-      if (!runtime.state.config.hideIdentityDecorations || !runtime.dissolvedSet.has(username)) {
+      if (!runtime.state.config.hideIdentityDecorations || !shouldAnonymizeUsername(username)) {
         restoreDecorationArtifactsWithin(container);
         continue;
       }
@@ -1450,7 +1523,7 @@
     for (const card of collect(root, '.user-card, #user-card')) {
       const profile = card.querySelector('a[data-user-card], a[href^="/u/"], [data-username]');
       const username = usernameOf(profile);
-      if (!runtime.state.config.hideIdentityDecorations || !runtime.dissolvedSet.has(username)) {
+      if (!runtime.state.config.hideIdentityDecorations || !shouldAnonymizeUsername(username)) {
         restoreDecorationArtifactsWithin(card);
         continue;
       }
@@ -1477,7 +1550,7 @@
   function signatureShouldBeHidden(signature) {
     const post = signaturePost(signature);
     const username = usernameOf(postAuthor(post));
-    return runtime.state.config.hideSignatures && runtime.dissolvedSet.has(username);
+    return runtime.state.config.hideSignatures && shouldAnonymizeUsername(username);
   }
 
   function scanSignatures(root) {
@@ -1606,8 +1679,10 @@
     for (const title of titles) {
       if (title.closest('#' + UI_ID)) continue;
       const author = titleTopicAuthor(title);
-      const shouldClean = runtime.state.config.cleanTopicTitles
-        && runtime.dissolvedSet.has(usernameOf(author));
+      const shouldClean = runtime.state.config.anonymousMode || (
+        runtime.state.config.cleanTopicTitles
+        && runtime.dissolvedSet.has(usernameOf(author))
+      );
       if (!shouldClean) {
         if (title.classList.contains('ldd-cleaned-title') || title.__lddOriginal?.textPatches) {
           restoreElement(title);
@@ -1694,7 +1769,7 @@
       actions.dataset.username = username;
       const button = actions.querySelector('.ldd-card-dissolve');
       if (button) button.textContent = runtime.dissolvedSet.has(username) ? '解除溶解' : '溶解此人';
-      if (!runtime.dissolvedSet.has(username)) {
+      if (!shouldAnonymizeUsername(username)) {
         restoreDissolveArtifactsWithin(card);
         // 卡片复用时先撤销旧主人的全部状态，再重放卡片内仍应溶解的其他身份。
         scanIdentities(card);
@@ -1812,6 +1887,7 @@
     document.querySelectorAll('[data-ldd-mutated]').forEach(restoreElement);
     document.querySelectorAll('.ldd-card-actions').forEach(element => element.remove());
     runtime.exposedAliases.clear();
+    runtime.visibleRealUsernames.clear();
   }
 
   function addScanRoot(root) {
@@ -2010,8 +2086,11 @@
     document.addEventListener('auxclick', handler, true);
   }
 
-  function iconSvg() {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.4c2.9 4.1 6.7 7.5 6.7 12A6.7 6.7 0 1 1 5.3 14.4c0-4.5 3.8-7.9 6.7-12Zm0 5.1c-1.7 2.5-3.8 4.7-3.8 7a3.8 3.8 0 0 0 7.6 0c0-2.3-2.1-4.5-3.8-7Z"/></svg>';
+  function iconSvg(enabled = true) {
+    if (enabled) {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.4c2.9 4.1 6.7 7.5 6.7 12A6.7 6.7 0 1 1 5.3 14.4c0-4.5 3.8-7.9 6.7-12Zm0 5.1c-1.7 2.5-3.8 4.7-3.8 7a3.8 3.8 0 0 0 7.6 0c0-2.3-2.1-4.5-3.8-7Z"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3.2c-2.8 3.9-6 7-6 11.1a6 6 0 0 0 12 0c0-4.1-3.2-7.2-6-11.1Z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M9.1 15.2a3 3 0 0 0 2.9 2.2"/></svg>';
   }
 
   function updateHeaderButtonState() {
@@ -2020,7 +2099,9 @@
     const enabled = runtime.state.config.enabled;
     button.classList.toggle('is-enabled', enabled);
     button.classList.toggle('is-disabled', !enabled);
-    button.dataset.enabled = String(enabled);
+    const state = String(enabled);
+    if (button.dataset.enabled !== state) button.innerHTML = iconSvg(enabled);
+    button.dataset.enabled = state;
     const label = enabled ? '溶解计划已启用，点击打开设置' : '溶解计划已停用，点击打开设置';
     button.title = label;
     button.setAttribute('aria-label', label);
@@ -2039,7 +2120,7 @@
     const button = document.createElement('button');
     button.id = HEADER_BUTTON_ID;
     button.type = 'button';
-    button.innerHTML = iconSvg();
+    button.innerHTML = iconSvg(runtime.state.config.enabled);
     button.addEventListener('click', openUi);
     const userMenu = host.querySelector('.current-user, .user-menu, [data-user-card]');
     host.insertBefore(button, userMenu || null);
@@ -2051,13 +2132,11 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      #${HEADER_BUTTON_ID}{position:relative;display:inline-flex!important;align-items:center;justify-content:center;box-sizing:border-box;width:30px!important;min-width:30px!important;height:30px!important;margin:0 2px!important;padding:0!important;border:0!important;border-radius:8px;background:transparent!important;cursor:pointer;overflow:hidden}
-      #${HEADER_BUTTON_ID}.is-enabled{background:rgba(100,139,178,.09)!important;color:#4d759e}
-      #${HEADER_BUTTON_ID}.is-enabled:hover{background:rgba(100,139,178,.17)!important;color:#365f87}
-      #${HEADER_BUTTON_ID}.is-enabled::after{content:"";position:absolute;right:3px;bottom:3px;width:5px;height:5px;border-radius:50%;background:#2f9e67;box-shadow:0 0 0 1px var(--header_background,var(--secondary,#fff))}
-      #${HEADER_BUTTON_ID}.is-disabled{background:rgba(120,128,136,.08)!important;color:#8c949c}
-      #${HEADER_BUTTON_ID}.is-disabled:hover{background:rgba(120,128,136,.15)!important;color:#697179}
-      #${HEADER_BUTTON_ID}.is-disabled::after{content:"";position:absolute;width:23px;height:2px;border-radius:1px;background:#c95d5d;transform:rotate(-45deg);box-shadow:0 0 0 1px var(--header_background,var(--secondary,#fff))}
+      #${HEADER_BUTTON_ID}{display:inline-flex!important;align-items:center;justify-content:center;box-sizing:border-box;width:30px!important;min-width:30px!important;height:30px!important;margin:0 2px!important;padding:0!important;border:0!important;border-radius:8px;background:transparent!important;cursor:pointer}
+      #${HEADER_BUTTON_ID}.is-enabled{color:#567fa7}
+      #${HEADER_BUTTON_ID}.is-enabled:hover{color:#3f6d99}
+      #${HEADER_BUTTON_ID}.is-disabled{color:#929aa2}
+      #${HEADER_BUTTON_ID}.is-disabled:hover{color:#737c84}
       #${HEADER_BUTTON_ID} svg{width:19px;height:19px;display:block}
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
@@ -2144,7 +2223,6 @@
           <section class="ldd-section ldd-grid">
             <div class="ldd-clean-column">
               <h3>基础清洗</h3>
-              <p>处理用户自身的身份标记；发送时只会自动映射当前页面实际出现过的 @假名，普通 @用户名保持不变。写 \\@假名可作为普通文字；写 @@用户名可绕过映射并按真实用户名发送。</p>
               <div class="ldd-options">
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="replaceAvatars">替换头像</label>
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="hideIdentityDecorations">清除头像框、标签和勋章</label>
@@ -2158,6 +2236,7 @@
               <div class="ldd-options">
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="hideDissolvedTopics">隐藏其发布的帖子</label>
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="cleanTopicTitles">清洗帖子标题的括号和 Emoji</label>
+                <label class="ldd-check"><input type="checkbox" data-ldd-option="anonymousMode">匿名模式</label>
               </div>
             </div>
           </section>
