@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.7.9
+// @version      0.8.0
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
@@ -1364,7 +1364,7 @@
       recordVisibleRealUsername(username, element);
       recordIdentityDisplayNames(username, boostAuthor || element);
       if (!username) {
-        setTransientIdentityState(element, 'pending');
+        setTransientIdentityState(element, 'clear');
         continue;
       }
       if (!shouldAnonymizeUsername(username)) {
@@ -2356,11 +2356,8 @@
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
       [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]) img.avatar,[data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]) img.user-image,[data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]) img[data-avatar-template],[data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]) .avatar,
       [data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]) img.avatar,[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]) img.user-image,[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]) img[data-avatar-template],[data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state]) .avatar,
-      a.reply-to-tab[data-ldd-identity-state="pending"] img.avatar,a.reply-to-tab[data-ldd-identity-state="pending"] img.user-image,a.reply-to-tab[data-ldd-identity-state="pending"] img[data-avatar-template],a.reply-to-tab[data-ldd-identity-state="pending"] .avatar,
-      .discourse-boosts__bubble[data-ldd-identity-state="pending"] img.avatar,.discourse-boosts__bubble[data-ldd-identity-state="pending"] img.user-image,.discourse-boosts__bubble[data-ldd-identity-state="pending"] img[data-avatar-template],.discourse-boosts__bubble[data-ldd-identity-state="pending"] .avatar,
-      .discourse-boosts__bubble[data-ldd-identity-state="masked"] img.avatar,.discourse-boosts__bubble[data-ldd-identity-state="masked"] img.user-image,.discourse-boosts__bubble[data-ldd-identity-state="masked"] img[data-avatar-template],.discourse-boosts__bubble[data-ldd-identity-state="masked"] .avatar,
-      a.reply-to-tab[data-ldd-identity-state="masked"] img.avatar,a.reply-to-tab[data-ldd-identity-state="masked"] img.user-image,a.reply-to-tab[data-ldd-identity-state="masked"] img[data-avatar-template],a.reply-to-tab[data-ldd-identity-state="masked"] .avatar{visibility:hidden!important}
-      a.reply-to-tab[data-ldd-identity-state="masked"] [data-ldd-avatar-alias],.discourse-boosts__bubble[data-ldd-identity-state="masked"] [data-ldd-avatar-alias]{visibility:visible!important}
+      .discourse-boosts__bubble[data-ldd-identity-state="masked"] img.avatar:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] img.user-image:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] img[data-avatar-template]:not([data-ldd-avatar-alias]),.discourse-boosts__bubble[data-ldd-identity-state="masked"] .avatar:not([data-ldd-avatar-alias]):not(:has([data-ldd-avatar-alias])),
+      a.reply-to-tab[data-ldd-identity-state="masked"] img.avatar:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] img.user-image:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] img[data-avatar-template]:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] .avatar:not([data-ldd-avatar-alias]):not(:has([data-ldd-avatar-alias])){visibility:hidden!important}
       [data-ldd-mutated].ldd-neutral-avatar,[data-ldd-mutated].ldd-neutral-avatar-host{border:none!important;box-shadow:none!important;outline:none!important;animation:none!important;filter:none!important;text-shadow:none!important}
       [data-ldd-mutated].ldd-neutral-avatar-host{background-color:transparent!important}
       [data-ldd-mutated].ldd-clear-avatar-frame{background-image:none!important}
