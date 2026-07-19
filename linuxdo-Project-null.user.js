@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.7
+// @version      0.8.8
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
-// @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
+// @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
 // @match        https://www.linux.do/*
@@ -12,6 +12,7 @@
 // @grant        GM_setValue
 // @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
+// @grant        unsafeWindow
 // @license      GPL-3.0-or-later
 // @noframes
 // ==/UserScript==
@@ -133,6 +134,11 @@
     aliasCache: new Map(),
     scopeAliasMaps: new Map(),
     composerMentionSnapshots: new WeakMap(),
+    composerMentionChoices: new WeakMap(),
+    activeComposerEditor: null,
+    activeComposerRoot: null,
+    ajaxHooked: false,
+    ajaxHookTimer: null,
     exposedAliases: new Map(),
     visibleRealUsernames: new Map(),
     visibleDisplayNames: new Map(),
@@ -281,7 +287,11 @@
     runtime.visibleRealUsernames.clear();
     runtime.visibleDisplayNames.clear();
     runtime.composerMentionSnapshots = new WeakMap();
+    runtime.composerMentionChoices = new WeakMap();
+    runtime.activeComposerEditor = null;
+    runtime.activeComposerRoot = null;
     runtime.identityRevision++;
+    resetDiscourseUserSearchCache();
   }
 
   function normalizeUsername(value) {
@@ -633,26 +643,28 @@
   }
 
   function recordExposedIdentity(username, identity, element) {
-    if (!username || !identity?.alias || !identity?.scope || !isActuallyExposed(element)) return;
+    const normalizedUsername = normalizeUsername(username);
+    if (!normalizedUsername || !identity?.alias || !identity?.scope || !isActuallyExposed(element)) return;
     let reverse = runtime.exposedAliases.get(identity.scope);
     if (!reverse) {
       reverse = new Map();
       runtime.exposedAliases.set(identity.scope, reverse);
     }
     const alias = identity.alias.toLowerCase();
-    if (reverse.has(alias) && reverse.get(alias) !== username) reverse.set(alias, '');
-    else if (!reverse.has(alias)) reverse.set(alias, username);
+    if (reverse.has(alias) && reverse.get(alias) !== normalizedUsername) reverse.set(alias, '');
+    else if (!reverse.has(alias)) reverse.set(alias, normalizedUsername);
   }
 
   function recordVisibleRealUsername(username, element) {
-    if (!username || !isActuallyExposed(element)) return;
+    const normalizedUsername = normalizeUsername(username);
+    if (!normalizedUsername || !isActuallyExposed(element)) return;
     const scope = scopeFor(element);
     let names = runtime.visibleRealUsernames.get(scope);
     if (!names) {
       names = new Set();
       runtime.visibleRealUsernames.set(scope, names);
     }
-    names.add(username);
+    names.add(normalizedUsername);
   }
 
   function normalizeDisplayName(value) {
@@ -660,7 +672,8 @@
   }
 
   function recordVisibleDisplayName(username, value, element) {
-    if (!username || !value || !isActuallyExposed(element)) return;
+    const normalizedUsername = normalizeUsername(username);
+    if (!normalizedUsername || !value || !isActuallyExposed(element)) return;
     const displayName = normalizeDisplayName(value);
     if (!displayName || displayName.length > 80) return;
     const scope = scopeFor(element);
@@ -670,7 +683,7 @@
       runtime.visibleDisplayNames.set(scope, names);
     }
     const existing = names.get(displayName);
-    if (!existing || existing === username) names.set(displayName, username);
+    if (!existing || existing === normalizedUsername) names.set(displayName, normalizedUsername);
     else names.set(displayName, '');
   }
 
@@ -692,8 +705,20 @@
     return names?.get(normalizeDisplayName(label.textContent)) || '';
   }
 
-  function visibleRealUsernameSet(scope) {
-    return new Set(runtime.visibleRealUsernames.get(scope) || []);
+  function primeVisibleRealUsernames(root) {
+    const selector = '[data-user-card], [data-username], a[href*="/u/"], a.reply-to-tab, .discourse-boosts__bubble';
+    for (const element of collect(root, selector)) {
+      const boostAuthor = element.matches('.discourse-boosts__bubble')
+        ? element.querySelector('[data-user-card], [data-username], a[href*="/u/"]')
+        : null;
+      const username = normalizeUsername(
+        (boostAuthor && usernameOf(boostAuthor))
+        || usernameOf(element)
+        || element.__lddBoostUsername
+        || element.__lddReplyUsername
+      );
+      recordVisibleRealUsername(username, element);
+    }
   }
 
   function exposedAliasReverseMap(scope) {
@@ -707,9 +732,9 @@
   }
 
   function mapAliasMentionsInSegment(segment, reverseMap, mappings) {
-    const boundary = '[\\s([（【{<"\'“‘,，。:：;；!?！？]';
+    const boundary = "[\\s()\\[\\]{}<>（）［］｛｝〈〉《》「」『』【】〔〕〖〗〘〙〚〛﹙﹚﹝﹞﹛﹜\\\"'“”‘’、，。．…:：;；!?！？]";
     const bypassPattern = new RegExp('(^|' + boundary + ')@@([A-Za-z0-9_.-]{1,40})(?![A-Za-z0-9_.-])', 'g');
-    const mentionPattern = new RegExp('(^|' + boundary + ')@([A-Za-z]{5,9})(?![A-Za-z0-9_])', 'g');
+    const mentionPattern = new RegExp('(^|' + boundary + ')@([A-Za-z]{5,9})(?![A-Za-z0-9_.-])', 'g');
     const bypassMarker = '\uE000ldd-at\uE001';
     const bypassed = String(segment || '').replace(bypassPattern, (whole, prefix, username) => {
       return prefix + bypassMarker + username;
@@ -782,9 +807,14 @@
     };
   }
 
-  function composerEditorFrom(target) {
-    const root = target?.closest?.('#reply-control, .composer, .composer-container')
+  function composerRootFrom(target) {
+    return target?.closest?.('#reply-control, .composer, .composer-container')
+      || runtime.activeComposerRoot?.isConnected && runtime.activeComposerRoot
       || document.querySelector('#reply-control');
+  }
+
+  function composerEditorFrom(target) {
+    const root = composerRootFrom(target);
     if (!root) return null;
     return root.querySelector(
       'textarea.d-editor-input, textarea.composer-editor, .d-editor-textarea-wrapper textarea, textarea[data-composer-input]'
@@ -795,17 +825,15 @@
     if (!editor) return null;
     const currentScope = scopeFor(editor);
     const existing = runtime.composerMentionSnapshots.get(editor);
-    const hasDraft = Boolean(String(editor.value || '').trim());
     if (
       existing
       && existing.revision === runtime.identityRevision
-      && (existing.scope === currentScope || hasDraft)
+      && existing.scope === currentScope
     ) return existing;
     const snapshot = {
       scope: currentScope,
       revision: runtime.identityRevision,
-      reverseMap: exposedAliasReverseMap(currentScope),
-      realUsernames: visibleRealUsernameSet(currentScope)
+      reverseMap: exposedAliasReverseMap(currentScope)
     };
     runtime.composerMentionSnapshots.set(editor, snapshot);
     return snapshot;
@@ -828,12 +856,292 @@
     return merged;
   }
 
-  function mergedComposerRealUsernames(editor) {
-    const snapshot = composerAliasSnapshot(editor);
-    const currentScope = scopeFor(editor);
-    const merged = new Set(snapshot?.realUsernames || []);
-    visibleRealUsernameSet(currentScope).forEach(username => merged.add(username));
-    return merged;
+  function addCssClass(value, className) {
+    const classes = new Set(String(value || '').split(/\s+/).filter(Boolean));
+    classes.add(className);
+    return Array.from(classes).join(' ');
+  }
+
+  function activeComposerContext() {
+    const focusedEditor = composerEditorFrom(document.activeElement);
+    const editor = focusedEditor || (runtime.activeComposerEditor?.isConnected ? runtime.activeComposerEditor : null);
+    const root = composerRootFrom(editor || document.activeElement);
+    if (!root || (!editor && !root.querySelector('.ProseMirror[contenteditable="true"], [contenteditable="true"].d-editor-input'))) {
+      return null;
+    }
+    return { editor, root };
+  }
+
+  function aliasSearchCandidate(source, alias, username, scopeTarget) {
+    const identity = identityFor(username, scopeTarget);
+    return {
+      ...(source || {}),
+      username,
+      name: alias,
+      title: alias,
+      description: '',
+      status: null,
+      avatar_template: identity.avatar,
+      cssClasses: addCssClass(source?.cssClasses, 'ldd-alias-candidate'),
+      __lddAlias: alias,
+      __lddRealUsername: username
+    };
+  }
+
+  function augmentUserSearchResponse(data, rawTerm) {
+    if (
+      !runtime.state.config.enabled
+      || !runtime.state.config.mapAliasMentions
+      || !data
+      || typeof data !== 'object'
+      || !Array.isArray(data.users)
+    ) return data;
+
+    const context = activeComposerContext();
+    if (!context) return data;
+    const scopeTarget = context.editor || context.root;
+    const reverseMap = context.editor
+      ? mergedComposerAliasMap(context.editor)
+      : exposedAliasReverseMap(scopeFor(scopeTarget));
+    const term = String(rawTerm || '').replace(/^@/, '').trim().toLowerCase();
+    if (!term || !/^[a-z]+$/.test(term) || !reverseMap.size) return data;
+
+    const matches = Array.from(reverseMap.entries())
+      .filter(([alias]) => alias.startsWith(term))
+      .slice(0, 6);
+    if (!matches.length) return data;
+
+    const aliasToReal = new Map(matches);
+    const realToAlias = new Map(matches.map(([alias, username]) => [username, alias]));
+    const includedAliases = new Set();
+    const users = data.users.map(user => {
+      const username = normalizeUsername(user?.username);
+      const mappedAlias = realToAlias.get(username);
+      if (mappedAlias) {
+        includedAliases.add(mappedAlias);
+        return aliasSearchCandidate(user, mappedAlias, username, scopeTarget);
+      }
+      if (aliasToReal.has(username)) {
+        return {
+          ...user,
+          cssClasses: addCssClass(user.cssClasses, 'ldd-real-alias-candidate')
+        };
+      }
+      return user;
+    });
+
+    for (const [alias, username] of matches) {
+      if (includedAliases.has(alias)) continue;
+      users.push(aliasSearchCandidate(null, alias, username, scopeTarget));
+    }
+    return { ...data, users };
+  }
+
+  function userSearchRequestDetails(args) {
+    const first = args[0];
+    const second = args[1];
+    const url = typeof first === 'string' ? first : first?.url;
+    if (!url) return null;
+    let pathname = '';
+    try { pathname = new URL(String(url), location.href).pathname; } catch (_) { return null; }
+    if (!/\/search\/users(?:\.json)?\/?$/i.test(pathname)) return null;
+    const index = typeof first === 'string' ? 1 : 0;
+    const options = index === 1 ? second : first;
+    if (!options || typeof options !== 'object') return null;
+    let term = '';
+    if (typeof options.data === 'string') {
+      try { term = new URLSearchParams(options.data).get('term') || ''; } catch (_) {}
+    } else if (options.data instanceof URLSearchParams) {
+      term = options.data.get('term') || '';
+    } else {
+      term = options.data?.term || '';
+    }
+    return { index, options, term };
+  }
+
+  function installUserSearchHook() {
+    if (runtime.ajaxHooked || runtime.ajaxHookTimer) return;
+    let attempts = 0;
+    const tryInstall = () => {
+      attempts++;
+      const pageWindow = typeof unsafeWindow === 'object' ? unsafeWindow : window;
+      const jquery = pageWindow?.jQuery;
+      const originalAjax = jquery?.ajax;
+      if (typeof originalAjax !== 'function') return false;
+      try {
+        if (originalAjax.__lddAliasHook) {
+          runtime.ajaxHooked = true;
+          return true;
+        }
+      } catch (_) { return false; }
+
+      const hookedAjax = function () {
+        const args = Array.from(arguments);
+        const details = userSearchRequestDetails(args);
+        if (!details) return originalAjax.apply(this, args);
+        const originalSuccess = details.options.success;
+        const options = {
+          ...details.options,
+          success(data, textStatus, xhr) {
+            const augmented = augmentUserSearchResponse(data, details.term);
+            if (Array.isArray(originalSuccess)) {
+              let result;
+              for (const callback of originalSuccess) {
+                if (typeof callback === 'function') result = callback.call(this, augmented, textStatus, xhr);
+              }
+              return result;
+            }
+            return typeof originalSuccess === 'function'
+              ? originalSuccess.call(this, augmented, textStatus, xhr)
+              : undefined;
+          }
+        };
+        args[details.index] = options;
+        return originalAjax.apply(this, args);
+      };
+      Object.defineProperty(hookedAjax, '__lddAliasHook', { value: true });
+      try {
+        jquery.ajax = hookedAjax;
+        runtime.ajaxHooked = jquery.ajax === hookedAjax;
+      } catch (_) {
+        runtime.ajaxHooked = false;
+      }
+      return runtime.ajaxHooked;
+    };
+
+    if (tryInstall()) return;
+    runtime.ajaxHookTimer = setInterval(() => {
+      if (tryInstall() || attempts >= 120) {
+        clearInterval(runtime.ajaxHookTimer);
+        runtime.ajaxHookTimer = null;
+      }
+    }, 250);
+  }
+
+  function resetDiscourseUserSearchCache() {
+    try {
+      const pageWindow = typeof unsafeWindow === 'object' ? unsafeWindow : window;
+      const pageRequire = pageWindow?.require;
+      if (typeof pageRequire !== 'function') return;
+      pageRequire('discourse/lib/user-search')?.resetUserSearchCache?.();
+    } catch (_) {}
+  }
+
+  function autocompleteCandidateAlias(candidate) {
+    return normalizeUsername(
+      candidate?.querySelector?.('.username')?.textContent
+      || candidate?.getAttribute?.('title')
+      || candidate?.textContent
+    );
+  }
+
+  function updateComposerMentionChoices(editor) {
+    const state = runtime.composerMentionChoices.get(editor);
+    if (!state) return null;
+    const previous = state.value;
+    const value = String(editor?.value || '');
+    if (previous === value) return state;
+
+    let start = 0;
+    while (start < previous.length && start < value.length && previous[start] === value[start]) start++;
+    let previousEnd = previous.length;
+    let valueEnd = value.length;
+    while (
+      previousEnd > start
+      && valueEnd > start
+      && previous[previousEnd - 1] === value[valueEnd - 1]
+    ) {
+      previousEnd--;
+      valueEnd--;
+    }
+    const delta = valueEnd - previousEnd;
+    const ranges = [];
+    for (const range of state.ranges) {
+      if (range.end <= start) ranges.push(range);
+      else if (range.start >= previousEnd) {
+        ranges.push({ ...range, start: range.start + delta, end: range.end + delta });
+      }
+    }
+    if (!ranges.length) {
+      runtime.composerMentionChoices.delete(editor);
+      return null;
+    }
+    const next = { value, ranges };
+    runtime.composerMentionChoices.set(editor, next);
+    return next;
+  }
+
+  function aliasMentionRangeNearCaret(editor, alias, fallbackCaret) {
+    const value = String(editor?.value || '');
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp('(^|[^A-Za-z0-9_.-])@(' + escaped + ')(?![A-Za-z0-9_.-])', 'gi');
+    const caret = Number.isInteger(editor?.selectionStart) ? editor.selectionStart : fallbackCaret;
+    let best = null;
+    let match;
+    while ((match = pattern.exec(value))) {
+      const start = match.index + match[1].length;
+      const end = start + match[0].length - match[1].length;
+      const distance = Math.abs((Number.isFinite(caret) ? caret : end) - end);
+      if (!best || distance < best.distance) best = { start, end, distance };
+    }
+    return best;
+  }
+
+  function rememberRealAliasChoice(editor, alias, fallbackCaret) {
+    const value = String(editor?.value || '');
+    let state = updateComposerMentionChoices(editor);
+    if (!state) state = { value, ranges: [] };
+    const range = aliasMentionRangeNearCaret(editor, alias, fallbackCaret);
+    if (!range) return false;
+    if (!state.ranges.some(item => item.start === range.start && item.end === range.end)) {
+      state.ranges.push({ alias, start: range.start, end: range.end });
+      state.ranges.sort((left, right) => left.start - right.start);
+    }
+    state.value = value;
+    runtime.composerMentionChoices.set(editor, state);
+    return true;
+  }
+
+  function protectRealAliasChoices(editor, value) {
+    const state = updateComposerMentionChoices(editor);
+    if (!state || state.value !== value || !state.ranges.length) {
+      return { text: value, restore: text => text };
+    }
+    let text = value;
+    const replacements = [];
+    const ranges = state.ranges.slice().sort((left, right) => right.start - left.start);
+    for (let index = 0; index < ranges.length; index++) {
+      const range = ranges[index];
+      const mention = value.slice(range.start, range.end);
+      if (mention.toLowerCase() !== '@' + range.alias) continue;
+      const marker = '\uE100ldd-real-' + index + '\uE101';
+      text = text.slice(0, range.start) + marker + text.slice(range.end);
+      replacements.push([marker, mention]);
+    }
+    return {
+      text,
+      restore(mapped) {
+        let restored = mapped;
+        for (const [marker, mention] of replacements) restored = restored.split(marker).join(mention);
+        return restored;
+      }
+    };
+  }
+
+  function scheduleAutocompleteMentionChoice(candidate) {
+    const context = activeComposerContext();
+    const editor = context?.editor;
+    if (!editor || !candidate?.classList.contains('ldd-real-alias-candidate')) return;
+    const alias = autocompleteCandidateAlias(candidate);
+    const username = mergedComposerAliasMap(editor).get(alias);
+    if (!alias || !username) return;
+    const previousCaret = editor.selectionStart;
+    const settle = attempt => {
+      if (!editor.isConnected) return;
+      if (rememberRealAliasChoice(editor, alias, previousCaret)) return;
+      if (attempt < 4) setTimeout(() => settle(attempt + 1), 20);
+    };
+    setTimeout(() => settle(0), 0);
   }
 
   function setComposerText(editor, value) {
@@ -858,39 +1166,36 @@
     if (!editor || editor.closest('#' + UI_ID)) return 0;
     const originalText = editor.value;
     const reverseMap = mergedComposerAliasMap(editor);
-    let result = mapAliasMentionsInMarkdown(originalText, reverseMap);
-    if (!result.mappings.length || result.text === originalText) return 0;
-
-    const realUsernames = mergedComposerRealUsernames(editor);
-    const keepRealUsernames = new Set();
-    for (const mapping of result.mappings) {
-      if (!realUsernames.has(mapping.alias) || mapping.alias === mapping.username) continue;
-      const chooseDissolved = globalThis.confirm(
-        '检测到 @' + mapping.alias + ' 同时对应两个用户：\n\n'
-        + '溶解身份：@' + mapping.username + '\n'
-        + '真实同名用户：@' + mapping.alias + '\n\n'
-        + '点击“确定”选择溶解身份；点击“取消”保留真实同名用户。'
-      );
-      if (!chooseDissolved) keepRealUsernames.add(mapping.alias);
-    }
-
-    if (keepRealUsernames.size) {
-      const selectedMap = new Map(reverseMap);
-      keepRealUsernames.forEach(alias => selectedMap.delete(alias));
-      result = mapAliasMentionsInMarkdown(originalText, selectedMap);
-    }
-    if (result.text === originalText) return 0;
-    setComposerText(editor, result.text);
+    const protectedChoices = protectRealAliasChoices(editor, originalText);
+    const result = mapAliasMentionsInMarkdown(protectedChoices.text, reverseMap);
+    const mappedText = protectedChoices.restore(result.text);
+    if (mappedText !== originalText) setComposerText(editor, mappedText);
+    runtime.composerMentionChoices.delete(editor);
+    if (!result.mappings.length || mappedText === originalText) return 0;
     return result.mappings.length;
   }
 
   function interceptComposerAliasMentions() {
     document.addEventListener('focusin', event => {
+      const root = composerRootFrom(event.target);
       const editor = composerEditorFrom(event.target);
-      if (editor && event.target === editor) composerAliasSnapshot(editor);
+      if (root) runtime.activeComposerRoot = root;
+      if (editor) {
+        runtime.activeComposerEditor = editor;
+        composerAliasSnapshot(editor);
+      }
+    }, true);
+
+    document.addEventListener('input', event => {
+      const editor = composerEditorFrom(event.target);
+      if (editor) updateComposerMentionChoices(editor);
     }, true);
 
     document.addEventListener('click', event => {
+      const candidate = event.target?.closest?.(
+        '.autocomplete.ac-user a.ldd-real-alias-candidate'
+      );
+      if (candidate) scheduleAutocompleteMentionChoice(candidate);
       const submit = event.target?.closest?.(
         '#reply-control button.create, #reply-control .create, #reply-control button[type="submit"], .composer button.create'
       );
@@ -898,6 +1203,12 @@
     }, true);
 
     document.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const candidate = document.querySelector(
+          '.autocomplete.ac-user a.selected.ldd-real-alias-candidate'
+        );
+        if (candidate) scheduleAutocompleteMentionChoice(candidate);
+      }
       if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
       const editor = composerEditorFrom(event.target);
       if (editor) mapComposerAliasMentions(editor);
@@ -2061,6 +2372,7 @@
       const epochReset = ensureTimeEpoch();
       if (epochReset) restoreAll();
       scanHiddenTopics(root);
+      primeVisibleRealUsernames(root);
       scanIdentities(root);
       scanIdentityDecorations(root);
       scanPlainMentions(root);
@@ -2184,6 +2496,9 @@
     runtime.exposedAliases.clear();
     runtime.visibleRealUsernames.clear();
     runtime.visibleDisplayNames.clear();
+    runtime.composerMentionSnapshots = new WeakMap();
+    runtime.composerMentionChoices = new WeakMap();
+    resetDiscourseUserSearchCache();
   }
 
   function addScanRoot(root) {
@@ -2307,6 +2622,10 @@
       runtime.pageGeneration++;
       runtime.activeTriggerNodes = new WeakSet();
       runtime.exposedAliases.clear();
+      runtime.composerMentionSnapshots = new WeakMap();
+      runtime.composerMentionChoices = new WeakMap();
+      runtime.activeComposerEditor = null;
+      runtime.activeComposerRoot = null;
       runtime.userCardContext = null;
       setTimeout(() => {
         restoreAll();
@@ -2437,6 +2756,9 @@
       #${HEADER_BUTTON_ID} svg{width:19px;height:19px;display:block}
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
+      .autocomplete.ac-user a.ldd-alias-candidate .username{display:none!important}
+      .autocomplete.ac-user a.ldd-alias-candidate .name{display:block!important;color:inherit!important;font-size:inherit!important}
+      .autocomplete.ac-user a.ldd-alias-candidate img.avatar{pointer-events:none!important}
       [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state])>img.avatar{visibility:hidden!important}
       [data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state])>a>img.avatar{visibility:hidden!important}
       .discourse-boosts__bubble[data-ldd-boost-avatar]>a{display:none!important}
@@ -2536,7 +2858,7 @@
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="replaceAvatars">替换头像</label>
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="hideIdentityDecorations">清除头像框、标签和勋章</label>
                 <label class="ldd-check"><input type="checkbox" data-ldd-option="hideSignatures">隐藏签名档</label>
-                <label class="ldd-check"><input type="checkbox" data-ldd-option="mapAliasMentions">发送时自动映射 @随机名</label>
+                <label class="ldd-check"><input type="checkbox" data-ldd-option="mapAliasMentions">在 @ 候选中匹配随机名</label>
               </div>
             </div>
             <div class="ldd-clean-column">
@@ -2741,6 +3063,7 @@
     hookRouting();
     interceptDissolvedProfileNavigation();
     interceptComposerAliasMentions();
+    installUserSearchHook();
     registerMenuCommands();
     listenForRemoteStateChanges();
 
