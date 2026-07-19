@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.7.0
-// @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、标题清洗、主页跳转保护与需确认的 @ 假名反向映射。
+// @version      0.7.1
+// @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与需确认的 @ 假名反向映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
 // @match        https://www.linux.do/*
@@ -126,20 +126,22 @@
     scanning: false,
     observer: null,
     routeHooked: false,
+    routeTimer: null,
     activeTriggerNodes: new WeakSet(),
     aliasCache: new Map(),
     scopeAliasMaps: new Map(),
     composerMentionSnapshots: new WeakMap(),
-    composerRestoreTimers: new WeakMap(),
     exposedAliases: new Map(),
     userCardContext: null,
     pageGeneration: 0,
     lastLocation: location.href,
     suppressMutations: 0,
     identityRevision: 0,
-    visualObservers: new Map()
+    visualObservers: new Map(),
+    persistedStateSnapshot: ''
   };
 
+  runtime.persistedStateSnapshot = JSON.stringify(runtime.state);
   rebuildSets();
 
   function defaultState() {
@@ -229,8 +231,37 @@
     return result;
   }
 
-  function saveState() {
-    GM_setValue(STORE_KEY, JSON.stringify(runtime.state));
+  function readPersistedState() {
+    try {
+      const raw = GM_getValue(STORE_KEY, '');
+      if (raw === '' || raw === null || raw === undefined) return null;
+      return normalizeState(typeof raw === 'string' ? JSON.parse(raw) : raw);
+    } catch (error) {
+      console.warn('[DissolvePlan] 合并最新状态失败，将保存当前标签页状态。', error);
+      return null;
+    }
+  }
+
+  function saveState(changedFields = []) {
+    const changed = new Set(changedFields);
+    const latest = readPersistedState();
+    const latestSnapshot = latest ? JSON.stringify(latest) : '';
+    const visualBeforeMerge = stateVisualFingerprint(runtime.state);
+
+    if (
+      latest
+      && runtime.persistedStateSnapshot
+      && latestSnapshot !== runtime.persistedStateSnapshot
+    ) {
+      for (const key of ['config', 'dissolvedUsers', 'secret', 'topicSalt', 'timeEpoch']) {
+        if (!changed.has(key)) runtime.state[key] = latest[key];
+      }
+    }
+
+    if (stateVisualFingerprint(runtime.state) !== visualBeforeMerge) rebuildSets();
+    const serialized = JSON.stringify(runtime.state);
+    GM_setValue(STORE_KEY, serialized);
+    runtime.persistedStateSnapshot = serialized;
   }
 
   function rebuildSets() {
@@ -389,7 +420,7 @@
     };
     runtime.activeTriggerNodes = new WeakSet();
     clearIdentityCaches();
-    saveState();
+    saveState(['timeEpoch']);
     if (shouldRescan) {
       restoreAll();
       queueScan(document);
@@ -401,7 +432,7 @@
     if (runtime.state.config.resetMode === 'topic') {
       runtime.state.topicSalt = randomToken(16);
       clearIdentityCaches();
-      saveState();
+      saveState(['topicSalt']);
       restoreAll();
       queueScan(document);
       if (reason) console.info('[DissolvePlan] 帖子模式身份盐已重置：' + reason);
@@ -429,7 +460,7 @@
     // 避免同一批 DOM 节点造成连续写入；五分钟内只持久化一次活跃时间。
     if (now - runtime.state.timeEpoch.lastTriggeredAt >= 5 * 60 * 1000) {
       runtime.state.timeEpoch.lastTriggeredAt = now;
-      saveState();
+      saveState(['timeEpoch']);
     }
   }
 
@@ -708,17 +739,6 @@
     editor.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  function scheduleComposerAliasRestore(editor, originalText, mappedText) {
-    const previous = runtime.composerRestoreTimers.get(editor);
-    if (previous) clearTimeout(previous);
-    const timer = setTimeout(() => {
-      runtime.composerRestoreTimers.delete(editor);
-      if (!editor.isConnected || editor.value !== mappedText) return;
-      setComposerText(editor, originalText);
-    }, 1400);
-    runtime.composerRestoreTimers.set(editor, timer);
-  }
-
   function mapComposerAliasMentions(target) {
     if (!runtime.state.config.enabled || !runtime.state.config.mapAliasMentions) return 0;
     const editor = composerEditorFrom(target);
@@ -734,7 +754,6 @@
     );
     if (!confirmed) return -1;
     setComposerText(editor, result.text);
-    scheduleComposerAliasRestore(editor, originalText, result.text);
     showToast('已映射 ' + result.mappings.length + ' 个溶解身份');
     return result.mappings.length;
   }
@@ -1514,7 +1533,18 @@
       '.topic-list-data.posters a[data-user-card], ' +
       'td.posters a[data-user-card], ' +
       '.topic-poster a[data-user-card], ' +
-      '.author a[data-user-card]'
+      '.author a[data-user-card], ' +
+      '.posters a[href*="/u/"], ' +
+      '.topic-poster a[href*="/u/"], ' +
+      '.author a[href*="/u/"]'
+    );
+  }
+
+  function searchResultPoster(result) {
+    return result?.querySelector(
+      '.author [data-user-card], .author [data-username], .author a[href*="/u/"], '
+      + '.search-result__author [data-user-card], .search-result__author a[href*="/u/"], '
+      + '.fps-result .author a[href*="/u/"]'
     );
   }
 
@@ -1528,10 +1558,7 @@
     }
 
     for (const result of collect(root, '.fps-result, .search-result')) {
-      const author = result.querySelector(
-        '.author [data-user-card], .author [data-username], .author a[href*="/u/"], '
-        + '.search-result__author [data-user-card], .fps-result .author a[href*="/u/"]'
-      );
+      const author = searchResultPoster(result);
       const shouldHide = runtime.state.config.hideDissolvedTopics
         && runtime.dissolvedSet.has(usernameOf(author));
       if (shouldHide) hideElement(result, 'topic');
@@ -1539,20 +1566,7 @@
     }
   }
 
-  function cleanTitleText(value) {
-    let text = String(value || '');
-    // 只清洗标题开头连续出现的装饰性标签，保留正文中的正常括号。
-    text = text.replace(
-      /^\s*(?:(?:【[^】\n]{0,30}】|\[[^\]\n]{0,30}\]|（[^）\n]{0,30}）|\([^\)\n]{0,30}\)|〔[^〕\n]{0,30}〕|「[^」\n]{0,30}」|『[^』\n]{0,30}』|《[^》\n]{0,30}》)\s*)+/u,
-      ''
-    );
-    try {
-      text = text.replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D]/gu, '');
-    } catch (_) {
-      text = text.replace(/[\u2600-\u27BF\u{1F300}-\u{1FAFF}\uFE0F\u200D]/gu, '');
-    }
-    return text.replace(/[ \t]{2,}/g, ' ').trim();
-  }
+  const TITLE_PREFIX_PATTERN = /^\s*(?:(?:\([^\)\r\n]{0,30}\)|（[^）\r\n]{0,30}）|﹙[^﹚\r\n]{0,30}﹚|\[[^\]\r\n]{0,30}\]|［[^］\r\n]{0,30}］|【[^】\r\n]{0,30}】|〔[^〕\r\n]{0,30}〕|〖[^〗\r\n]{0,30}〗|〘[^〙\r\n]{0,30}〙|〚[^〛\r\n]{0,30}〛|﹝[^﹞\r\n]{0,30}﹞|\{[^\}\r\n]{0,30}\}|｛[^｝\r\n]{0,30}｝|﹛[^﹜\r\n]{0,30}﹜|《[^》\r\n]{0,30}》|〈[^〉\r\n]{0,30}〉|「[^」\r\n]{0,30}」|『[^』\r\n]{0,30}』)\s*)+/u;
 
   function emojiClean(value) {
     try {
@@ -1575,8 +1589,22 @@
     return nodes;
   }
 
+  function titleTopicAuthor(title) {
+    const listRow = title.closest('.topic-list-item, .latest-topic-list-item');
+    if (listRow) return firstTopicPoster(listRow);
+
+    const searchResult = title.closest('.fps-result, .search-result');
+    if (searchResult) return searchResultPoster(searchResult);
+
+    if (!title.closest('#topic-title, h1[data-topic-id]')) return null;
+    const firstPost = document.querySelector(
+      'article[data-post-number="1"], article#post_1, #post_1 article[data-post-id], '
+      + '.topic-post:first-of-type article[data-post-id], article[data-post-id]'
+    );
+    return postAuthor(firstPost);
+  }
+
   function scanTitles(root) {
-    if (!runtime.state.config.cleanTopicTitles) return;
     const selector = [
       '.topic-list-item a.title',
       '.topic-list-item a.raw-topic-link',
@@ -1589,15 +1617,28 @@
       'h1[data-topic-id] a'
     ].join(',');
 
-    for (const title of collect(root, selector)) {
+    const titles = new Set(collect(root, selector));
+    if (currentTopicId()) {
+      document.querySelectorAll('#topic-title h1 a, #topic-title .fancy-title, h1[data-topic-id] a')
+        .forEach(title => titles.add(title));
+    }
+
+    for (const title of titles) {
       if (title.closest('#' + UI_ID)) continue;
+      const author = titleTopicAuthor(title);
+      const shouldClean = runtime.state.config.cleanTopicTitles
+        && runtime.dissolvedSet.has(usernameOf(author));
+      if (!shouldClean) {
+        if (title.classList.contains('ldd-cleaned-title') || title.__lddOriginal?.textPatches) {
+          restoreElement(title);
+        }
+        continue;
+      }
       const nodes = titleSourceNodes(title);
       if (!nodes.length) continue;
       const sources = nodes.map(node => sourceTextForPatch(title, 'title-clean', node));
       const combined = sources.join('');
-      const prefixMatch = combined.match(
-        /^\s*(?:(?:【[^】\n]{0,30}】|\[[^\]\n]{0,30}\]|（[^）\n]{0,30}）|\([^\)\n]{0,30}\)|〔[^〕\n]{0,30}〕|「[^」\n]{0,30}」|『[^』\n]{0,30}』|《[^》\n]{0,30}》)\s*)+/u
-      );
+      const prefixMatch = combined.match(TITLE_PREFIX_PATTERN);
       let remainingPrefix = prefixMatch ? prefixMatch[0].length : 0;
       const cleanedParts = sources.map(source => {
         let value = source;
@@ -1695,7 +1736,7 @@
     if (index >= 0) list.splice(index, 1);
     else list.push(normalized);
     rebuildSets();
-    saveState();
+    saveState([listKey]);
     restoreAll();
     queueScan(document);
     renderUi();
@@ -1935,6 +1976,8 @@
     }
     window.addEventListener('popstate', onRoute);
     window.addEventListener('hashchange', onRoute);
+    // 带 @grant 的用户脚本可能运行在隔离环境，页面自己的 History API 调用未必经过上面的包装。
+    runtime.routeTimer = setInterval(onRoute, 500);
   }
 
   function shouldBlockDissolvedProfileNavigation(anchor, event) {
@@ -2207,7 +2250,11 @@
       runtime.activeTriggerNodes = new WeakSet();
     }
     rebuildSets();
-    saveState();
+    const changedFields = ['config', 'dissolvedUsers'];
+    if (previousMode !== runtime.state.config.resetMode && runtime.state.config.resetMode === 'time') {
+      changedFields.push('timeEpoch');
+    }
+    saveState(changedFields);
     restoreAll();
     if (runtime.state.config.enabled) queueScan(document);
     renderUi();
@@ -2275,6 +2322,7 @@
         const nextState = normalizeState(typeof value === 'string' ? JSON.parse(value) : value);
         const visualChanged = stateVisualFingerprint(runtime.state) !== stateVisualFingerprint(nextState);
         runtime.state = nextState;
+        runtime.persistedStateSnapshot = JSON.stringify(nextState);
         if (!visualChanged) {
           // 其他标签页仅刷新了 lastTriggeredAt；不恢复 DOM，避免真实身份闪现。
           updateEnabledUiOnly();
