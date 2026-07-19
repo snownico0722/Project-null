@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.11
+// @version      0.8.12
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
 // @author       qiuqiu & ChatGPT
@@ -2042,31 +2042,80 @@
     }
   }
 
+  const QUOTE_TITLE_SELECTOR = [
+    'aside.quote[data-username] .title',
+    '.quote[data-username] .title',
+    'div[data-has-quote-controls][data-can-toggle-quote][data-can-navigate-to-post]'
+  ].join(',');
+
+  function quoteOwnerForTitle(title) {
+    if (!title) return null;
+    return title.matches?.('[data-username]')
+      ? title
+      : title.closest?.('aside.quote[data-username], .quote[data-username]');
+  }
+
+  function quoteTitleTextNodes(title) {
+    const walker = document.createTreeWalker(title, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest('.quote-controls, svg, script, style')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return String(node.nodeValue || '').trim()
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT;
+      }
+    });
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    return nodes;
+  }
+
   function scanQuoteAuthors(root) {
+    const titles = new Set(collect(root, QUOTE_TITLE_SELECTOR));
     for (const quote of collect(root, 'aside.quote[data-username], .quote[data-username]')) {
-      const username = normalizeUsername(quote.getAttribute('data-username'));
       const title = quote.querySelector('.title');
-      if (!title) continue;
+      if (title) titles.add(title);
+    }
+
+    for (const title of titles) {
+      const owner = quoteOwnerForTitle(title);
+      const username = normalizeUsername(owner?.getAttribute('data-username') || usernameOf(owner));
+      if (!username) continue;
       if (!shouldAnonymizeUsername(username)) {
+        restoreDissolveArtifactsWithin(title);
         restoreTextPatchKey(title, 'quote-author');
-        title.removeAttribute('data-ldd-alias');
-        title.classList.remove('ldd-dissolved-name');
         continue;
       }
-      if (title.querySelector('[data-user-card], [data-username], a[href*="/u/"]')) continue;
-      const identity = identityFor(username, quote);
-      const walker = document.createTreeWalker(title, NodeFilter.SHOW_TEXT);
-      const nodes = [];
-      while (walker.nextNode()) nodes.push(walker.currentNode);
+
+      const identity = identityFor(username, owner || title);
+      let changed = false;
+      replaceAvatarsWithin(title, identity);
+
+      for (const carrier of collect(title, '[data-user-card], [data-username], a[href*="/u/"]')) {
+        if (usernameOf(carrier) !== username) continue;
+        maskIdentityAttributes(carrier, identity);
+        if (shouldReplaceIdentityText(carrier, username)) replaceTextElement(carrier, identity, username);
+        replaceAvatarsWithin(carrier, identity);
+        changed = true;
+      }
+
       const pattern = new RegExp(username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      const target = nodes.find(node => pattern.test(sourceTextForPatch(title, 'quote-author', node)));
-      if (!target) continue;
-      const source = sourceTextForPatch(title, 'quote-author', target);
-      patchTextNode(title, 'quote-author', target, source.replace(pattern, identity.alias));
+      const textNodes = quoteTitleTextNodes(title);
+      pruneTextPatchKey(title, 'quote-author', textNodes);
+      for (const node of textNodes) {
+        const source = sourceTextForPatch(title, 'quote-author', node);
+        if (!pattern.test(source)) continue;
+        patchTextNode(title, 'quote-author', node, source.replace(pattern, identity.alias));
+        changed = true;
+      }
+      if (!changed && !title.querySelector('[data-ldd-avatar-alias], [data-ldd-mutated]')) continue;
       title.setAttribute('data-ldd-alias', identity.alias);
       addPatchedClass(title, 'ldd-dissolved-name');
       markTriggered(title);
       recordExposedIdentity(username, identity, title);
+      ensureTargetedVisualObserver(targetedVisualContainer(title));
     }
   }
 
@@ -2738,7 +2787,8 @@
       '.fps-result, .search-result, .user-card, #user-card, .cooked, .excerpt, ' +
       '.topic-excerpt, #topic-title, .topic-title, .user-stream-item, ' +
       '.activity-stream .item, .bookmark-list-item, .signature-img, .user-signature'
-      + ', .notification, .item-label, .reply-to-tab, .discourse-boosts__bubble'
+      + ', .notification, .item-label, .reply-to-tab, .discourse-boosts__bubble, '
+      + '.quote, [data-has-quote-controls]'
     );
     runtime.pendingRoots.add(context || element);
   }

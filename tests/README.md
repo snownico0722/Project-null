@@ -1,3 +1,3 @@
 # Local regression pages
 
-Open `ui-light-test.html` in a browser, or run it with local headless Chrome. The test is fully offline and passes when its JSON output contains `"failures":false`.
+Open an HTML file in this directory in a browser, or run it with local headless Chrome. The regression pages are fully offline and pass when their JSON output contains `"failures":false`.
