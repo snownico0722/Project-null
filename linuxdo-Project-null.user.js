@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.5
+// @version      0.8.6
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
@@ -1208,6 +1208,19 @@
     bubble.setAttribute('data-ldd-boost-avatar', '1');
   }
 
+  function replaceReplyAvatar(reply, identity) {
+    if (!runtime.state.config.replaceAvatars || !reply || !identity) return;
+    setPatchedStyle(
+      reply,
+      'replyAvatar',
+      '--ldd-reply-avatar',
+      'url("' + identity.avatar.replace(/"/g, '%22') + '")',
+      'important'
+    );
+    reply.setAttribute('data-ldd-reply-avatar', '1');
+    reply.setAttribute('data-ldd-reply-alias', identity.alias);
+  }
+
   function shouldReplaceIdentityText(element, username) {
     if (!element.matches('a, span, strong, b')) return false;
     if (element.hasAttribute('data-ldd-alias') || element.__lddOriginal?.textPatches?.some(record => record.key === 'identity')) return true;
@@ -1239,7 +1252,8 @@
     '.ldd-neutral-avatar',
     '.ldd-neutral-avatar-host',
     '.ldd-clear-avatar-frame',
-    '[data-ldd-boost-avatar]'
+    '[data-ldd-boost-avatar]',
+    '[data-ldd-reply-avatar]'
   ].join(',');
 
   const DECORATION_ARTIFACT_SELECTOR = [
@@ -1366,6 +1380,8 @@
 
     for (const element of elements) {
       const isBoostBubble = element.matches('.discourse-boosts__bubble');
+      const boostContainer = isBoostBubble ? element : element.closest('.discourse-boosts__bubble');
+      const isReplyReference = element.matches('a.reply-to-tab');
       const boostAuthor = isBoostBubble
         ? element.querySelector('[data-user-card], [data-username], a[href*="/u/"]')
         : null;
@@ -1376,7 +1392,7 @@
         || element.__lddBoostUsername
       );
       if (username && isBoostBubble) element.__lddBoostUsername = username;
-      if (username && element.matches('a.reply-to-tab')) element.__lddReplyUsername = username;
+      if (username && isReplyReference) element.__lddReplyUsername = username;
       recordVisibleRealUsername(username, element);
       recordIdentityDisplayNames(username, boostAuthor || element);
       if (!username) {
@@ -1403,10 +1419,11 @@
       const identity = identityFor(username, element);
       markTriggered(element);
       maskIdentityAttributes(element, identity);
-      if (replaceText) replaceTextElement(element, identity, username);
+      if (replaceText && !isReplyReference) replaceTextElement(element, identity, username);
       else restoreTextPatchKey(element, 'identity');
-      if (hasAvatar) replaceAvatarsWithin(element, identity);
+      if (hasAvatar && !boostContainer && !isReplyReference) replaceAvatarsWithin(element, identity);
       if (isBoostBubble) replaceBoostAvatar(element, identity);
+      if (isReplyReference) replaceReplyAvatar(element, identity);
       setTransientIdentityState(element, 'masked');
       ensureTargetedVisualObserver(targetedVisualContainer(element));
     }
@@ -2082,6 +2099,16 @@
           else element.style.removeProperty('--ldd-boost-avatar');
         }
       }
+      if ('replyAvatar' in original) {
+        const patch = original.replyAvatar;
+        const current = element.style.getPropertyValue('--ldd-reply-avatar');
+        const currentPriority = element.style.getPropertyPriority('--ldd-reply-avatar');
+        const expected = applied.replyAvatar;
+        if (!expected || (current === expected.value && currentPriority === expected.priority)) {
+          if (patch.value) element.style.setProperty('--ldd-reply-avatar', patch.value, patch.priority || '');
+          else element.style.removeProperty('--ldd-reply-avatar');
+        }
+      }
       if ('hidden' in original && (!('hidden' in applied) || element.hidden === applied.hidden)) {
         element.hidden = original.hidden;
       }
@@ -2102,6 +2129,8 @@
       element.removeAttribute('data-ldd-alias');
       element.removeAttribute('data-ldd-avatar-alias');
       element.removeAttribute('data-ldd-boost-avatar');
+      element.removeAttribute('data-ldd-reply-avatar');
+      element.removeAttribute('data-ldd-reply-alias');
       element.removeAttribute('data-ldd-hidden-kind');
       element.removeAttribute('data-ldd-mutated');
       element.removeAttribute('data-ldd-identity-state');
@@ -2382,11 +2411,15 @@
       #${HEADER_BUTTON_ID} svg{width:19px;height:19px;display:block}
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
-      [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state]){visibility:hidden!important}
+      [data-ldd-active] a.reply-to-tab:not([data-ldd-identity-state])>img.avatar{visibility:hidden!important}
       [data-ldd-active] .discourse-boosts__bubble:not([data-ldd-identity-state])>a>img.avatar{visibility:hidden!important}
       .discourse-boosts__bubble[data-ldd-identity-state="masked"]>a{display:none!important}
       .discourse-boosts__bubble[data-ldd-identity-state="masked"]::before{content:"";display:block;width:24px;height:24px;flex:0 0 24px;background-image:var(--ldd-boost-avatar);background-size:cover;background-position:center;border-radius:50%}
-      a.reply-to-tab[data-ldd-identity-state="masked"] img.avatar:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] img.user-image:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] img[data-avatar-template]:not([data-ldd-avatar-alias]),a.reply-to-tab[data-ldd-identity-state="masked"] .avatar:not([data-ldd-avatar-alias]):not(:has([data-ldd-avatar-alias])){visibility:hidden!important}
+      a.reply-to-tab[data-ldd-identity-state="masked"]>img.avatar,a.reply-to-tab[data-ldd-identity-state="masked"]>img.user-image,a.reply-to-tab[data-ldd-identity-state="masked"]>img[data-avatar-template],a.reply-to-tab[data-ldd-identity-state="masked"]>.avatar{display:none!important}
+      a.reply-to-tab[data-ldd-identity-state="masked"]>.d-icon{order:0!important}
+      a.reply-to-tab[data-ldd-identity-state="masked"]>span{display:none!important}
+      a.reply-to-tab[data-ldd-identity-state="masked"]::before{content:"";display:block;order:1;width:24px;height:24px;flex:0 0 24px;background-image:var(--ldd-reply-avatar);background-size:cover;background-position:center;border-radius:50%}
+      a.reply-to-tab[data-ldd-identity-state="masked"]::after{content:attr(data-ldd-reply-alias);display:block;order:2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       [data-ldd-mutated].ldd-neutral-avatar,[data-ldd-mutated].ldd-neutral-avatar-host{border:none!important;box-shadow:none!important;outline:none!important;animation:none!important;filter:none!important;text-shadow:none!important}
       [data-ldd-mutated].ldd-neutral-avatar-host{background-color:transparent!important}
       [data-ldd-mutated].ldd-clear-avatar-frame{background-image:none!important}
@@ -2433,6 +2466,7 @@
       #${TOAST_ID}{position:fixed;z-index:100001;left:50%;bottom:28px;transform:translate(-50%,12px);padding:9px 13px;border-radius:8px;background:#26384a;color:#fff;font:12px/1.3 Arial,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 7px 24px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease}
       #${TOAST_ID}.is-visible{opacity:1;transform:translate(-50%,0)}
       @media(max-width:620px){#${UI_ID} .ldd-grid,#${UI_ID} .ldd-radios,#${UI_ID} .ldd-options{grid-template-columns:1fr}#${UI_ID} .ldd-dialog{max-height:calc(100vh - 20px)}#${UI_ID}{padding:10px}}
+      @media(max-width:767px){a.reply-to-tab[data-ldd-identity-state="masked"]::after{display:none}}
       @media(prefers-reduced-motion:reduce){#${UI_ID} .ldd-switch::after,#${TOAST_ID}{transition:none}}
     `;
     (document.head || document.documentElement).appendChild(style);
