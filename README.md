@@ -37,6 +37,8 @@
 
 本项目参考了 [LinuxDo Sight shield 1.7.2](https://greasyfork.org/zh-CN/scripts/584208-linuxdo-sight-shield) 的页面识别与路由适配思路。该上游项目采用 MIT License，本项目未复制其完整代码。
 
+扩展假名词表中的新增词来自 [Spache](https://github.com/words/spache) 和 [Dale-Chall](https://github.com/words/dale-chall) 的 MIT 许可词表，许可文本见 [THIRD-PARTY-LICENSES.md](./THIRD-PARTY-LICENSES.md)。
+
 ## 友情链接
 
 - [Linux DO](https://linux.do/)：真实世界的技术社区

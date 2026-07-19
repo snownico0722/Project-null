@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.12
+// @version      0.8.13
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
 // @author       qiuqiu & ChatGPT
@@ -52,7 +52,7 @@
     pureMode: false
   });
 
-  const ALIAS_WORDS = Object.freeze([
+  const BASE_ALIAS_WORDS = Object.freeze([
     'acorn', 'agate', 'alder', 'amber', 'amity', 'anchor', 'anise', 'apple',
     'apricot', 'arbor', 'arctic', 'arrow', 'aspen', 'atlas', 'autumn', 'azalea',
     'bamboo', 'banner', 'barley', 'basil', 'beacon', 'berry', 'birch', 'blossom',
@@ -111,6 +111,200 @@
     'comment', 'dialog', 'header', 'index', 'layout', 'margin', 'outline', 'panel',
     'paragraph', 'profile', 'record', 'section', 'sidebar', 'topic',
     'afterglow', 'algorithm', 'alligator', 'animation', 'apartment', 'armadillo', 'artichoke', 'backboard', 'ballpoint', 'bandstand', 'beachball', 'beanstalk', 'blueberry', 'booklover', 'butterfly', 'cafeteria', 'carnation', 'celebrate', 'chamomile', 'clipboard', 'coastline', 'courtyard', 'crossroad', 'dandelion', 'dreamland', 'evergreen', 'farmhouse', 'feathered', 'fireplace', 'fireproof', 'flagstone', 'flowerpot', 'footprint', 'gentleman', 'goldfinch', 'grassland', 'harmonica', 'honeycomb', 'houseboat', 'jellybean', 'landscape', 'lightning', 'moonlight', 'moonstone', 'orchestra', 'paintwork', 'paperclip', 'pineapple', 'porcelain', 'raincloud', 'rainstorm', 'raspberry', 'riverbank', 'sailcloth', 'sandstone', 'seashells', 'snowflake', 'starboard', 'starlight', 'sunflower', 'telescope', 'turntable', 'turquoise', 'waterfall', 'waterline', 'wildberry', 'xylophone', 'yesterday',
+  ]);
+
+  // Filtered to 5-9 lowercase letters from the MIT-licensed Spache and Dale-Chall lists.
+  const EXTRA_ALIAS_WORDS = Object.freeze([
+    'aboard', 'absent', 'accept', 'accident', 'account', 'aching', 'across', 'address',
+    'admire', 'afternoon', 'afterward', 'agree', 'ahead', 'airfield', 'airplane', 'airport',
+    'airship', 'alarm', 'alike', 'alive', 'alley', 'allow', 'alone', 'along',
+    'aloud', 'america', 'american', 'amount', 'angel', 'animal', 'another', 'answer',
+    'anybody', 'anyhow', 'anyway', 'anywhere', 'apart', 'apiece', 'appear', 'april',
+    'apron', 'arise', 'armful', 'arose', 'around', 'arrange', 'arrive', 'ashes',
+    'aside', 'asleep', 'attack', 'attend', 'attention', 'august', 'author', 'avenue',
+    'awake', 'awaken', 'awfully', 'awhile', 'babies', 'backward', 'backwards', 'bacon',
+    'badge', 'badly', 'bakery', 'baking', 'banana', 'bandage', 'banjo', 'banker',
+    'barber', 'barefoot', 'barely', 'barrel', 'baseball', 'basement', 'batch', 'bathe',
+    'bathing', 'bathroom', 'bathtub', 'battle', 'beach', 'beard', 'beast', 'beating',
+    'beautiful', 'beautify', 'beauty', 'became', 'become', 'bedbug', 'bedroom', 'bedspread',
+    'bedtime', 'beech', 'beefsteak', 'beehive', 'began', 'beggar', 'begged', 'begin',
+    'beginning', 'begun', 'behave', 'behind', 'believe', 'belong', 'bench', 'beneath',
+    'berries', 'beside', 'besides', 'better', 'bible', 'bicycle', 'bigger', 'billboard',
+    'birth', 'birthday', 'biting', 'bitter', 'black', 'blackbird', 'blackness', 'blame',
+    'blank', 'blanket', 'blast', 'blaze', 'bleed', 'bless', 'blessing', 'blind',
+    'blindfold', 'blinds', 'block', 'bluebird', 'blush', 'board', 'boast', 'bobwhite',
+    'bodies', 'boiler', 'bonnet', 'bookcase', 'borrow', 'bother', 'bottom', 'bought',
+    'bounce', 'boxcar', 'boxer', 'boxes', 'boyhood', 'bracelet', 'brain', 'brake',
+    'branch', 'brass', 'brave', 'bread', 'break', 'breakfast', 'breast', 'breath',
+    'breathe', 'brick', 'bride', 'bridge', 'bring', 'broad', 'broadcast', 'broke',
+    'broken', 'broom', 'brother', 'brought', 'brown', 'brush', 'bubble', 'buckle',
+    'buffalo', 'build', 'building', 'built', 'bullet', 'bumblebee', 'bunch', 'bundle',
+    'bunny', 'burst', 'bushel', 'business', 'butcher', 'butter', 'cabbage', 'cabin',
+    'cackle', 'calendar', 'caller', 'calling', 'camel', 'campfire', 'canal', 'candy',
+    'cannon', 'cannot', 'canoe', 'capital', 'cardboard', 'careful', 'careless', 'carload',
+    'carpet', 'carriage', 'carrot', 'carry', 'carve', 'cashier', 'catbird', 'catch',
+    'catcher', 'catfish', 'catsup', 'cattle', 'caught', 'cause', 'ceiling', 'center',
+    'cereal', 'certain', 'certainly', 'chain', 'chair', 'champion', 'change', 'charge',
+    'chart', 'chase', 'chatter', 'cheap', 'cheat', 'check', 'checkers', 'cheek',
+    'cheese', 'chest', 'chick', 'chicken', 'chief', 'child', 'childhood', 'children',
+    'chill', 'chilly', 'chimney', 'china', 'chipmunk', 'chocolate', 'choice', 'choose',
+    'chorus', 'chose', 'chosen', 'christen', 'christmas', 'church', 'churn', 'cigarette',
+    'circus', 'citizen', 'clang', 'class', 'classmate', 'classroom', 'cleaner', 'clear',
+    'clerk', 'click', 'cliff', 'climb', 'cloak', 'clock', 'close', 'closet',
+    'cloth', 'clothes', 'clothing', 'cloud', 'cloudy', 'clown', 'cluck', 'clump',
+    'coach', 'coast', 'cobbler', 'cocoa', 'coconut', 'cocoon', 'codfish', 'coffee',
+    'coffeepot', 'collar', 'college', 'color', 'colored', 'comic', 'coming', 'company',
+    'compare', 'conductor', 'connect', 'contest', 'continue', 'cooked', 'cookie', 'cookies',
+    'cooking', 'cooler', 'corner', 'correct', 'couch', 'cough', 'count', 'counter',
+    'country', 'county', 'course', 'court', 'cousin', 'cover', 'coward', 'cowardly',
+    'cowboy', 'cradle', 'cramps', 'cranberry', 'crank', 'cranky', 'crash', 'crawl',
+    'cream', 'creamy', 'creek', 'creep', 'crept', 'cried', 'cries', 'croak',
+    'crook', 'crooked', 'cross', 'crossing', 'crowd', 'crowded', 'crown', 'cruel',
+    'crumb', 'crumble', 'crush', 'crust', 'cupboard', 'cupful', 'curly', 'curve',
+    'custard', 'customer', 'daddy', 'daily', 'dairy', 'damage', 'dance', 'dancing',
+    'dandy', 'danger', 'dangerous', 'darkness', 'darling', 'daughter', 'daybreak', 'daytime',
+    'december', 'decide', 'defeat', 'defend', 'defense', 'dentist', 'depend', 'deposit',
+    'describe', 'desert', 'deserve', 'desire', 'destroy', 'diamond', 'different', 'dinner',
+    'direct', 'direction', 'dirty', 'disappear', 'discover', 'dislike', 'dismiss', 'distance',
+    'ditch', 'divide', 'doctor', 'dollar', 'dolly', 'donkey', 'doorbell', 'doorknob',
+    'double', 'dough', 'downtown', 'dozen', 'dragon', 'drain', 'drank', 'drawing',
+    'dream', 'dress', 'dresser', 'dried', 'drill', 'drink', 'drive', 'driven',
+    'drove', 'drown', 'drowsy', 'dusty', 'dwarf', 'dwell', 'dwelt', 'eagle',
+    'early', 'earth', 'eastern', 'eaten', 'eight', 'eighteen', 'eighth', 'eighty',
+    'elbow', 'elder', 'eldest', 'electric', 'elephant', 'eleven', 'elsewhere', 'empty',
+    'ending', 'engineer', 'english', 'enjoy', 'enter', 'envelope', 'erase', 'eraser',
+    'errand', 'escape', 'evening', 'everybody', 'everyday', 'exact', 'except', 'exchange',
+    'excite', 'excited', 'exciting', 'exclaim', 'excuse', 'expect', 'explain', 'extra',
+    'eyebrow', 'fable', 'facing', 'factory', 'faint', 'fairy', 'faith', 'false',
+    'family', 'faraway', 'farming', 'farther', 'fashion', 'fasten', 'father', 'fault',
+    'favor', 'favorite', 'feast', 'february', 'fellow', 'fence', 'fever', 'field',
+    'fierce', 'fifteen', 'fifth', 'fifty', 'fight', 'final', 'finally', 'finger',
+    'finish', 'firearm', 'fireworks', 'firing', 'first', 'fisherman', 'flake', 'flame',
+    'flash', 'flesh', 'flies', 'flight', 'float', 'flock', 'flood', 'floor',
+    'flour', 'flower', 'flowery', 'flutter', 'foggy', 'folks', 'follow', 'following',
+    'foolish', 'football', 'forehead', 'forget', 'forgive', 'forgot', 'forgotten', 'forth',
+    'fortune', 'forty', 'forward', 'fought', 'found', 'fountain', 'fourteen', 'fourth',
+    'freeze', 'freight', 'french', 'friday', 'fried', 'friend', 'frighten', 'front',
+    'frown', 'froze', 'fruit', 'fudge', 'fully', 'funny', 'furniture', 'gallon',
+    'gallop', 'garage', 'garbage', 'gasoline', 'gather', 'geese', 'general', 'gentlemen',
+    'geography', 'getting', 'giant', 'given', 'giving', 'gladly', 'glance', 'glasses',
+    'gleam', 'glide', 'glory', 'glove', 'gobble', 'godmother', 'going', 'goldfish',
+    'goodbye', 'goodness', 'goods', 'goody', 'goose', 'govern', 'gracious', 'grade',
+    'grain', 'grandma', 'grandpa', 'grandson', 'grape', 'grapes', 'grass', 'grateful',
+    'grave', 'gravel', 'graveyard', 'gravy', 'graze', 'grease', 'great', 'green',
+    'greet', 'grind', 'groan', 'grocery', 'ground', 'group', 'growl', 'guard',
+    'guess', 'guest', 'guide', 'gunpowder', 'habit', 'haircut', 'hairpin', 'handful',
+    'handle', 'happen', 'happily', 'happiness', 'happy', 'hardly', 'hardship', 'hardware',
+    'harness', 'haste', 'hasten', 'hasty', 'hatch', 'hatchet', 'hayfield', 'headache',
+    'health', 'healthy', 'heard', 'hearing', 'heart', 'heater', 'heaven', 'heavy',
+    'height', 'hello', 'helmet', 'helpful', 'henhouse', 'hidden', 'highway', 'hillside',
+    'hilltop', 'hilly', 'history', 'hitch', 'holder', 'holiday', 'hollow', 'homely',
+    'homesick', 'honeybee', 'honeymoon', 'honor', 'hopeless', 'horse', 'horseback', 'horseshoe',
+    'hospital', 'hotel', 'hound', 'house', 'housetop', 'housewife', 'housework', 'humble',
+    'hundred', 'hunger', 'hungry', 'hunter', 'hurrah', 'hurry', 'husband', 'ideal',
+    'imagine', 'important', 'improve', 'inches', 'income', 'indeed', 'indian', 'indoors',
+    'insect', 'inside', 'instant', 'instead', 'insult', 'intend', 'invite', 'jacks',
+    'january', 'jelly', 'jellyfish', 'jockey', 'joking', 'journey', 'joyful', 'joyous',
+    'judge', 'juice', 'juicy', 'junior', 'kindness', 'kingdom', 'kitchen', 'kitten',
+    'kitty', 'kneel', 'knife', 'knives', 'knock', 'known', 'ladies', 'language',
+    'large', 'laugh', 'laundry', 'leader', 'learn', 'learned', 'least', 'leather',
+    'leave', 'leaving', 'lemonade', 'length', 'lesson', 'letter', 'letting', 'lettuce',
+    'level', 'liberty', 'light', 'lightness', 'likely', 'liking', 'listen', 'little',
+    'liver', 'lives', 'living', 'lizard', 'loaves', 'lonely', 'lonesome', 'lookout',
+    'loose', 'lovely', 'lover', 'lucky', 'lumber', 'lunch', 'lying', 'machine',
+    'machinery', 'magazine', 'magic', 'mailbox', 'mailman', 'major', 'making', 'mamma',
+    'manager', 'manger', 'market', 'marriage', 'married', 'marry', 'master', 'match',
+    'matter', 'mattress', 'mayor', 'maypole', 'means', 'meant', 'measure', 'medicine',
+    'meeting', 'member', 'merry', 'message', 'metal', 'middle', 'midnight', 'mighty',
+    'miler', 'milkman', 'million', 'miner', 'minute', 'mischief', 'misspell', 'mistake',
+    'moment', 'monday', 'money', 'monkey', 'month', 'moose', 'morning', 'morrow',
+    'mostly', 'mother', 'motor', 'mount', 'mountain', 'mouse', 'mouth', 'movie',
+    'moving', 'muddy', 'multiply', 'music', 'myself', 'narrow', 'naughty', 'nearby',
+    'nearly', 'necktie', 'neighbor', 'neither', 'nerve', 'nevermore', 'newspaper', 'nibble',
+    'nickel', 'night', 'nightgown', 'nineteen', 'ninety', 'nobody', 'noise', 'noisy',
+    'north', 'northern', 'nothing', 'notice', 'november', 'nowhere', 'number', 'nurse',
+    'oatmeal', 'ocean', 'october', 'offer', 'office', 'officer', 'onion', 'onward',
+    'orange', 'orchard', 'order', 'organ', 'otherwise', 'outdoors', 'outlaw', 'outside',
+    'outward', 'overalls', 'overcoat', 'overeat', 'overhead', 'overhear', 'overnight', 'overturn',
+    'owing', 'owner', 'package', 'painful', 'paint', 'painting', 'palace', 'pancake',
+    'pants', 'pardon', 'parent', 'partly', 'partner', 'party', 'passenger', 'paste',
+    'pasture', 'patch', 'patter', 'pavement', 'payment', 'peace', 'peach', 'peaches',
+    'peanut', 'pearl', 'penny', 'people', 'perfect', 'perfume', 'person', 'phone',
+    'piano', 'picket', 'pickle', 'picture', 'pigeon', 'piggy', 'pitch', 'pitcher',
+    'place', 'plain', 'plane', 'plant', 'plate', 'platform', 'playhouse', 'playmate',
+    'plaything', 'please', 'pleasure', 'plenty', 'point', 'poison', 'police', 'policeman',
+    'polish', 'ponies', 'popcorn', 'popped', 'porch', 'possible', 'postage', 'postman',
+    'potato', 'potatoes', 'pound', 'powder', 'power', 'powerful', 'practice', 'praise',
+    'prayer', 'prepare', 'present', 'pretend', 'pretty', 'price', 'prince', 'princess',
+    'print', 'prize', 'problem', 'promise', 'proper', 'protect', 'proud', 'prove',
+    'prune', 'public', 'puddle', 'pumpkin', 'punch', 'punish', 'pupil', 'puppy',
+    'purple', 'purse', 'putting', 'quack', 'quart', 'quarter', 'queen', 'question',
+    'quick', 'quickly', 'quilt', 'rabbit', 'raccoon', 'radio', 'radish', 'railroad',
+    'railway', 'rainbow', 'rainy', 'raise', 'raisin', 'ranch', 'rapidly', 'rattle',
+    'reach', 'reading', 'reason', 'rebuild', 'receive', 'recess', 'redbird', 'redbreast',
+    'refuse', 'rejoice', 'remain', 'remember', 'remind', 'remove', 'repair', 'repay',
+    'repeat', 'reply', 'report', 'return', 'review', 'reward', 'riddle', 'rider',
+    'riding', 'right', 'rising', 'roadside', 'roast', 'robber', 'rocky', 'roller',
+    'rooster', 'rotten', 'rough', 'round', 'route', 'rowboat', 'royal', 'rubbed',
+    'rubber', 'rubbish', 'ruler', 'rumble', 'running', 'rusty', 'sadness', 'safety',
+    'sailboat', 'saint', 'salad', 'sandwich', 'sandy', 'satin', 'saturday', 'savage',
+    'savings', 'scales', 'scare', 'scarf', 'school', 'schoolboy', 'scold', 'scorch',
+    'score', 'scrap', 'scrape', 'scratch', 'scream', 'screen', 'scrub', 'search',
+    'season', 'second', 'secret', 'seeing', 'seesaw', 'select', 'selfish', 'sense',
+    'sentence', 'separate', 'september', 'servant', 'serve', 'service', 'setting', 'settle',
+    'seven', 'seventeen', 'seventh', 'seventy', 'several', 'shade', 'shady', 'shake',
+    'shaker', 'shaking', 'shall', 'shame', 'shape', 'sharp', 'shave', 'shear',
+    'shears', 'sheep', 'sheet', 'shell', 'shepherd', 'shine', 'shining', 'shiny',
+    'shirt', 'shock', 'shoemaker', 'shone', 'shook', 'shoot', 'shopping', 'short',
+    'shoulder', 'shout', 'shovel', 'shower', 'sickness', 'sidewalk', 'sideways', 'sight',
+    'silence', 'silent', 'silly', 'single', 'sister', 'sitting', 'sixteen', 'sixth',
+    'sixty', 'skate', 'skirt', 'slate', 'sleep', 'sleepy', 'sleeve', 'sleigh',
+    'slept', 'slice', 'slide', 'slipped', 'slipper', 'slippery', 'slowly', 'small',
+    'smart', 'smell', 'smile', 'smoke', 'smooth', 'snail', 'snake', 'snapping',
+    'sneeze', 'sniff', 'snowball', 'snowy', 'snuff', 'socks', 'soldier', 'somebody',
+    'somehow', 'sometime', 'sometimes', 'somewhere', 'sorry', 'sound', 'south', 'southern',
+    'space', 'sparrow', 'speak', 'spear', 'special', 'speech', 'speed', 'spell',
+    'spelling', 'spend', 'spent', 'spider', 'spike', 'spill', 'spinach', 'spirit',
+    'splash', 'spoke', 'spook', 'spoon', 'sport', 'spread', 'spring', 'sprinkle',
+    'square', 'squash', 'squeak', 'squeeze', 'squirrel', 'stable', 'stack', 'stage',
+    'stair', 'stall', 'stamp', 'stand', 'stare', 'start', 'starve', 'state',
+    'states', 'station', 'steak', 'steal', 'steam', 'steamboat', 'steamer', 'steel',
+    'steep', 'steeple', 'steer', 'stepping', 'stick', 'sticky', 'stiff', 'stillness',
+    'sting', 'stitch', 'stock', 'stocking', 'stole', 'stood', 'stool', 'stoop',
+    'stopping', 'store', 'stories', 'stork', 'storm', 'stormy', 'stove', 'straight',
+    'strange', 'stranger', 'strap', 'straw', 'street', 'stretch', 'strike', 'string',
+    'strip', 'stripes', 'strong', 'stuck', 'study', 'stuff', 'stump', 'stung',
+    'subject', 'sudden', 'suffer', 'sugar', 'summer', 'sunday', 'sunlight', 'sunrise',
+    'sunshine', 'supper', 'suppose', 'surely', 'surface', 'surprise', 'swamp', 'swear',
+    'sweat', 'sweater', 'sweep', 'sweet', 'sweetness', 'swell', 'swimming', 'swing',
+    'sword', 'swore', 'table', 'tailor', 'taken', 'taking', 'talker', 'tardy',
+    'taste', 'taught', 'teach', 'tease', 'teaspoon', 'teeth', 'telephone', 'temper',
+    'tennis', 'terrible', 'thank', 'thankful', 'thanks', 'thick', 'thief', 'thing',
+    'think', 'third', 'thirsty', 'thirteen', 'thirty', 'thorn', 'thought', 'thousand',
+    'three', 'threw', 'throat', 'throne', 'throw', 'thrown', 'thumb', 'thunder',
+    'thursday', 'tickle', 'tiger', 'tight', 'tired', 'title', 'toadstool', 'toast',
+    'tobacco', 'today', 'toilet', 'tomato', 'tomorrow', 'tongue', 'tonight', 'tooth',
+    'toothpick', 'touch', 'toward', 'towards', 'towel', 'tower', 'trace', 'track',
+    'trade', 'traffic', 'train', 'treat', 'trick', 'tricycle', 'tried', 'trolley',
+    'trouble', 'truck', 'truly', 'trunk', 'trust', 'truth', 'tuesday', 'tumble',
+    'tunnel', 'turkey', 'turtle', 'twelve', 'twenty', 'twice', 'umbrella', 'uncle',
+    'underwear', 'undress', 'unfold', 'unhappy', 'unhurt', 'uniform', 'united', 'unkind',
+    'unknown', 'unless', 'unwilling', 'upper', 'upset', 'upside', 'upstairs', 'uptown',
+    'upward', 'useful', 'usual', 'valentine', 'valuable', 'value', 'vegetable', 'victory',
+    'village', 'visit', 'visitor', 'voice', 'wagon', 'waist', 'waken', 'walnut',
+    'washer', 'washtub', 'waste', 'watch', 'watchman', 'water', 'wayside', 'weaken',
+    'weakness', 'wealth', 'weary', 'weather', 'weave', 'wedding', 'wednesday', 'weigh',
+    'western', 'whale', 'wheat', 'wheel', 'whipped', 'whirl', 'whiskey', 'whisky',
+    'whisper', 'white', 'whole', 'wicked', 'wiggle', 'wildcat', 'willing', 'windmill',
+    'windy', 'winner', 'witch', 'without', 'woman', 'women', 'wonderful', 'wooden',
+    'woods', 'worker', 'workman', 'world', 'worry', 'worse', 'worst', 'worth',
+    'wound', 'wrapped', 'wreck', 'wring', 'write', 'writing', 'written', 'wrong',
+    'wrote', 'wrung', 'yellow', 'yonder', 'young', 'youngster',
+  ]);
+
+  const ALIAS_WORDS = Object.freeze([
+    ...BASE_ALIAS_WORDS,
+    ...EXTRA_ALIAS_WORDS
   ]);
 
   const ALIAS_WORDS_BY_LENGTH = Object.freeze({
@@ -2096,7 +2290,7 @@
       for (const carrier of collect(title, '[data-user-card], [data-username], a[href*="/u/"]')) {
         if (usernameOf(carrier) !== username) continue;
         maskIdentityAttributes(carrier, identity);
-        if (shouldReplaceIdentityText(carrier, username)) replaceTextElement(carrier, identity, username);
+        replaceTextElement(carrier, identity, username);
         replaceAvatarsWithin(carrier, identity);
         changed = true;
       }
@@ -2104,11 +2298,28 @@
       const pattern = new RegExp(username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       const textNodes = quoteTitleTextNodes(title);
       pruneTextPatchKey(title, 'quote-author', textNodes);
+      let matchedUsername = false;
       for (const node of textNodes) {
         const source = sourceTextForPatch(title, 'quote-author', node);
         if (!pattern.test(source)) continue;
         patchTextNode(title, 'quote-author', node, source.replace(pattern, identity.alias));
+        matchedUsername = true;
         changed = true;
+      }
+      if (!matchedUsername) {
+        const displayNameNode = textNodes.find(node => {
+          const source = sourceTextForPatch(title, 'quote-author', node);
+          return /^\s*[^:：\r\n]{1,80}?\s*[:：]\s*$/.test(source);
+        });
+        if (displayNameNode) {
+          const source = sourceTextForPatch(title, 'quote-author', displayNameNode);
+          const replacement = source.replace(
+            /^(\s*)[^:：\r\n]{1,80}?(\s*[:：]\s*)$/,
+            '$1' + identity.alias + '$2'
+          );
+          patchTextNode(title, 'quote-author', displayNameNode, replacement);
+          changed = true;
+        }
       }
       if (!changed && !title.querySelector('[data-ldd-avatar-alias], [data-ldd-mutated]')) continue;
       title.setAttribute('data-ldd-alias', identity.alias);

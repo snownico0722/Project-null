@@ -24,7 +24,7 @@ jQuery = { ajax() { return { abort() {} }; } };
       <div class="title" data-has-quote-controls="true" data-can-toggle-quote="true" data-can-navigate-to-post="true">
         <div class="quote-controls"><button type="button" class="quote-toggle">toggle</button></div>
         <img class="avatar" src="https://linux.do/user_avatar/linux.do/hidden-user/48/1.png" alt="hidden-user">
-        hidden-user:
+        Visible Name:
       </div>
       <blockquote>quoted body</blockquote>
     </aside>
@@ -53,7 +53,8 @@ addEventListener('DOMContentLoaded', async () => {
   const initial = snapshot();
   const title = document.querySelector('.quote .title');
   title.innerHTML = '<div class="quote-controls"><button type="button" class="quote-toggle">toggle</button></div>'
-    + '<img class="avatar" src="https://linux.do/user_avatar/linux.do/hidden-user/48/2.png" alt="hidden-user"> hidden-user:';
+    + '<img class="avatar" src="https://linux.do/user_avatar/linux.do/hidden-user/48/2.png" alt="hidden-user"> '
+    + '<a data-user-card="hidden-user" href="/u/hidden-user">Another Name</a>:';
   await wait(180);
   const rebuilt = snapshot();
   const restoredState = { ...saved, dissolvedUsers: [] };
@@ -62,7 +63,7 @@ addEventListener('DOMContentLoaded', async () => {
   const restored = snapshot();
   const maskedFailure = [initial, rebuilt].some(result =>
     !result.alias
-    || result.titleText.includes('hidden-user')
+    || /hidden-user|Visible Name|Another Name/i.test(result.titleText)
     || !result.titleText.includes(result.alias)
     || !result.avatarReplaced
     || result.avatarAlias !== result.alias
@@ -71,7 +72,7 @@ addEventListener('DOMContentLoaded', async () => {
   );
   const restoreFailure = Boolean(
     restored.alias
-    || !restored.titleText.includes('hidden-user')
+    || !restored.titleText.includes('Another Name')
     || restored.avatarReplaced
     || restored.avatarAlias
     || !restored.controlsPresent
