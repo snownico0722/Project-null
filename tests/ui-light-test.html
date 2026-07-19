@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+const saved = {
+  version: 7,
+  config: { enabled: true, resetMode: 'time', replaceAvatars: true, hideIdentityDecorations: true, hideSignatures: true, mapAliasMentions: true, hideDissolvedTopics: false, cleanTopicTitles: false, pureMode: false },
+  dissolvedUsers: ['alice'], secret: '0123456789abcdefghijklmn', topicSalt: 'topic',
+  timeEpoch: { id: 'epoch', startedAt: Date.now(), lastTriggeredAt: 0 }
+};
+let writes = 0;
+let restoreCalls = 0;
+let rafRequested = 0;
+let rafExecuted = 0;
+requestAnimationFrame = callback => {
+  rafRequested++;
+  return setTimeout(() => { rafExecuted++; callback(performance.now()); }, 0);
+};
+cancelAnimationFrame = timer => clearTimeout(timer);
+const nativeDocumentQuery = Document.prototype.querySelectorAll;
+Document.prototype.querySelectorAll = function (selector) {
+  if (this === document && selector === '[data-ldd-mutated]') restoreCalls++;
+  return nativeDocumentQuery.call(this, selector);
+};
+GM_getValue = () => JSON.stringify(saved);
+GM_setValue = (key, value) => { writes++; Object.assign(saved, JSON.parse(value)); };
+GM_addValueChangeListener = () => {};
+GM_registerMenuCommand = () => {};
+unsafeWindow = window;
+jQuery = { ajax() { return { abort() {} }; } };
+</script>
+<header id="site-header"><div class="header-icons"></div></header>
+<main><a data-user-card="alice" href="/u/alice">alice</a> <a id="bob" data-user-card="bob" href="/u/bob">bob</a></main>
+<pre id="out"></pre>
+<script src="../linuxdo-Project-null.user.js"></script>
+<script>
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+addEventListener('DOMContentLoaded', async () => {
+  await wait(160);
+  document.querySelector('#ldd-header-button').click();
+  await wait(20);
+  const ui = document.querySelector('#ldd-ui');
+  const option = ui.querySelector('[data-ldd-option="hideSignatures"]');
+  const dissolved = ui.querySelector('[data-ldd-dissolved]');
+  const initialRestore = restoreCalls;
+  const initialWrites = writes;
+  option.click();
+  await wait(25);
+  const afterOption = { restore: restoreCalls, writes };
+  option.click();
+  await wait(25);
+  dissolved.value = 'alice\nbob';
+  dissolved.dispatchEvent(new Event('input', { bubbles: true }));
+  await wait(420);
+  const bobBeforeClose = document.querySelector('#bob').textContent;
+  const afterDraft = { restore: restoreCalls, writes };
+  document.querySelector('.ldd-close').click();
+  await wait(300);
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const bobAfterClose = document.querySelector('#bob').textContent;
+  const aliceAfterClose = document.querySelector('[data-user-card="alice"]').textContent;
+  document.querySelector('#bob').setAttribute('title', 'bob');
+  await wait(100);
+  const bobAfterMutation = document.querySelector('#bob').textContent;
+  const afterClose = { restore: restoreCalls, writes, rafRequested, rafExecuted };
+  document.querySelector('#ldd-header-button').click();
+  await wait(20);
+  document.querySelector('[data-ldd-enabled]').click();
+  await wait(40);
+  const afterToggle = { restore: restoreCalls, writes };
+  const noOpWrites = writes;
+  const noOp = document.querySelector('[data-ldd-option="hideSignatures"]');
+  noOp.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(25);
+  const noOpFinalWrites = writes;
+  out.textContent = JSON.stringify({
+    initialRestore, initialWrites, afterOption, afterDraft, afterClose, afterToggle,
+    rafRequested, rafExecuted,
+    bobBeforeClose, bobAfterClose, bobAfterMutation, aliceAfterClose,
+    savedUsers: saved.dissolvedUsers, noOpWrites, noOpFinalWrites,
+    failures: [
+      afterOption.restore !== initialRestore,
+      afterDraft.restore !== initialRestore,
+      afterClose.restore !== initialRestore + 1,
+      afterToggle.restore !== afterClose.restore + 1,
+      bobBeforeClose !== 'bob',
+      bobAfterClose === 'bob',
+      bobAfterMutation !== bobAfterClose,
+      aliceAfterClose === 'alice',
+      rafRequested > 20,
+      noOpFinalWrites !== noOpWrites
+    ].some(Boolean)
+  });
+});
+</script>

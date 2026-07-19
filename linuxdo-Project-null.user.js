@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.10
+// @version      0.8.11
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
 // @author       qiuqiu & ChatGPT
@@ -2939,10 +2939,10 @@
     button.classList.toggle('is-disabled', !enabled);
     const state = String(enabled);
     if (button.dataset.enabled !== state) button.innerHTML = iconSvg(enabled);
-    button.dataset.enabled = state;
+    if (button.dataset.enabled !== state) button.dataset.enabled = state;
     const label = enabled ? '溶解计划已启用，点击打开设置' : '溶解计划已停用，点击打开设置';
-    button.title = label;
-    button.setAttribute('aria-label', label);
+    if (button.title !== label) button.title = label;
+    if (button.getAttribute('aria-label') !== label) button.setAttribute('aria-label', label);
   }
 
   function ensureHeaderButton() {
@@ -3118,10 +3118,12 @@
       if (event.target.closest('[data-ldd-reset]')) {
         flushPendingUiSave(ui);
         resetCurrentIdentities('用户手动重置');
+        renderUi();
+        markUiStateApplied(ui);
         showUiStatus('随机身份已重置。');
       }
       if (event.target.closest('[data-ldd-enabled]')) {
-        saveUi({ toggleEnabled: true, statusMessage: '' });
+        saveUi({ toggleEnabled: true, applyNow: true });
       }
     });
 
@@ -3131,7 +3133,7 @@
 
     ui.addEventListener('change', event => {
       if (event.target.matches('[data-ldd-dissolved], [data-ldd-option], input[name="ldd-mode"]')) {
-        saveUi({ statusMessage: '' });
+        saveUi();
       }
     });
 
@@ -3147,6 +3149,7 @@
     renderUi();
     const ui = document.getElementById(UI_ID);
     if (!ui) return;
+    markUiStateApplied(ui);
     ui.classList.add('is-open');
     setTimeout(() => ui.querySelector('.ldd-dialog')?.focus(), 0);
   }
@@ -3162,20 +3165,21 @@
     clearPendingUiSave(ui);
     ui.__lddSaveTimer = setTimeout(() => {
       ui.__lddSaveTimer = null;
-      if (ui.isConnected && ui.classList.contains('is-open')) saveUi({ statusMessage: '' });
+      if (ui.isConnected && ui.classList.contains('is-open')) saveUi();
     }, 350);
   }
 
   function flushPendingUiSave(ui) {
     if (!ui || ui.__lddSaveTimer === null || ui.__lddSaveTimer === undefined) return;
     clearPendingUiSave(ui);
-    saveUi({ statusMessage: '' });
+    saveUi();
   }
 
   function closeUi() {
     const ui = document.getElementById(UI_ID);
     if (!ui) return;
     flushPendingUiSave(ui);
+    applyPendingUiState(ui);
     ui.classList.remove('is-open');
   }
 
@@ -3208,16 +3212,46 @@
     };
   }
 
+  function markUiStateApplied(ui) {
+    if (!ui) return;
+    ui.__lddAppliedFingerprint = stateVisualFingerprint(runtime.state);
+  }
+
+  function applyUiState(ui) {
+    syncActiveMarker();
+    restoreAll();
+    if (runtime.state.config.enabled) queueScan(document);
+    renderUi();
+    markUiStateApplied(ui);
+  }
+
+  function applyPendingUiState(ui) {
+    if (!ui) return;
+    const fingerprint = stateVisualFingerprint(runtime.state);
+    if (ui.__lddAppliedFingerprint === fingerprint) {
+      return;
+    }
+    applyUiState(ui);
+  }
+
   function saveUi(options = {}) {
     const ui = document.getElementById(UI_ID);
     if (!ui) return;
     clearPendingUiSave(ui);
     const previousMode = runtime.state.config.resetMode;
     const draft = readUiDraft(ui);
+    if (options.toggleEnabled) draft.config.enabled = !runtime.state.config.enabled;
+    const configChanged = JSON.stringify(runtime.state.config) !== JSON.stringify(draft.config);
+    const usersChanged = JSON.stringify(runtime.state.dissolvedUsers) !== JSON.stringify(draft.dissolvedUsers);
+    if (!configChanged && !usersChanged) {
+      if (options.applyNow) applyPendingUiState(ui);
+      return false;
+    }
+
     runtime.state.config = draft.config;
     runtime.state.dissolvedUsers = draft.dissolvedUsers;
-    if (options.toggleEnabled) runtime.state.config.enabled = !runtime.state.config.enabled;
-    if (previousMode !== runtime.state.config.resetMode && runtime.state.config.resetMode === 'time') {
+    const modeChanged = previousMode !== runtime.state.config.resetMode;
+    if (modeChanged && runtime.state.config.resetMode === 'time') {
       const now = Date.now();
       runtime.state.timeEpoch = {
         id: randomToken(16),
@@ -3226,18 +3260,16 @@
       };
       runtime.activeTriggerNodes = new WeakSet();
     }
-    rebuildSets();
-    const changedFields = ['config', 'dissolvedUsers'];
-    if (previousMode !== runtime.state.config.resetMode && runtime.state.config.resetMode === 'time') {
+    if (usersChanged || modeChanged) rebuildSets();
+    const changedFields = [];
+    if (configChanged) changedFields.push('config');
+    if (usersChanged) changedFields.push('dissolvedUsers');
+    if (modeChanged && runtime.state.config.resetMode === 'time') {
       changedFields.push('timeEpoch');
     }
     saveState(changedFields);
-    syncActiveMarker();
-    restoreAll();
-    if (runtime.state.config.enabled) queueScan(document);
-    renderUi();
-    const message = options.statusMessage || '';
-    if (message) showUiStatus(message);
+    if (options.applyNow) applyPendingUiState(ui);
+    return true;
   }
 
   function showUiStatus(message) {
