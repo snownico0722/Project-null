@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.7.6
+// @version      0.7.7
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与 @ 假名的无感反向映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
@@ -134,6 +134,7 @@
     composerMentionSnapshots: new WeakMap(),
     exposedAliases: new Map(),
     visibleRealUsernames: new Map(),
+    visibleDisplayNames: new Map(),
     userCardContext: null,
     pageGeneration: 0,
     lastLocation: location.href,
@@ -277,6 +278,7 @@
     runtime.scopeAliasMaps.clear();
     runtime.exposedAliases.clear();
     runtime.visibleRealUsernames.clear();
+    runtime.visibleDisplayNames.clear();
     runtime.composerMentionSnapshots = new WeakMap();
     runtime.identityRevision++;
   }
@@ -650,6 +652,43 @@
       runtime.visibleRealUsernames.set(scope, names);
     }
     names.add(username);
+  }
+
+  function normalizeDisplayName(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+  }
+
+  function recordVisibleDisplayName(username, value, element) {
+    if (!username || !value || !isActuallyExposed(element)) return;
+    const displayName = normalizeDisplayName(value);
+    if (!displayName || displayName.length > 80) return;
+    const scope = scopeFor(element);
+    let names = runtime.visibleDisplayNames.get(scope);
+    if (!names) {
+      names = new Map();
+      runtime.visibleDisplayNames.set(scope, names);
+    }
+    const existing = names.get(displayName);
+    if (!existing || existing === username) names.set(displayName, username);
+    else names.set(displayName, '');
+  }
+
+  function recordIdentityDisplayNames(username, element) {
+    if (!username || !element) return;
+    const values = [
+      element.getAttribute?.('data-display-name'),
+      element.getAttribute?.('title'),
+      element.getAttribute?.('aria-label')
+    ];
+    const text = String(element.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text && text.length <= 80) values.push(text);
+    values.filter(Boolean).forEach(value => recordVisibleDisplayName(username, value, element));
+  }
+
+  function displayNameUsername(label) {
+    const scope = scopeFor(label);
+    const names = runtime.visibleDisplayNames.get(scope);
+    return names?.get(normalizeDisplayName(label.textContent)) || '';
   }
 
   function visibleRealUsernameSet(scope) {
@@ -1149,7 +1188,7 @@
   }
 
   function replaceAvatarsWithin(element, identity) {
-    if (!runtime.state.config.replaceAvatars) return;
+    if (!runtime.state.config.replaceAvatars || !element) return;
     const avatars = new Set();
     if (element.matches?.('img.avatar, img.user-image, img[data-avatar-template], .avatar')) avatars.add(element);
     element.querySelectorAll?.('img.avatar, img.user-image, img[data-avatar-template], .avatar img, .avatar').forEach(item => avatars.add(item));
@@ -1293,6 +1332,20 @@
     runtime.visualObservers.clear();
   }
 
+  function transientIdentityContainer(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+    if (element.matches('a.reply-to-tab, .discourse-boosts__bubble')) return element;
+    return element.closest('.discourse-boosts__bubble');
+  }
+
+  function setTransientIdentityState(element, state) {
+    const container = transientIdentityContainer(element);
+    if (!container) return;
+    if (container.getAttribute('data-ldd-identity-state') !== state) {
+      container.setAttribute('data-ldd-identity-state', state);
+    }
+  }
+
   function scanIdentities(root) {
     const selector = '[data-user-card], [data-username], a[href*="/u/"], a.reply-to-tab, .discourse-boosts__bubble';
     const elements = collect(root, selector);
@@ -1308,8 +1361,14 @@
       if (username && isBoostBubble) element.__lddBoostUsername = username;
       if (username && element.matches('a.reply-to-tab')) element.__lddReplyUsername = username;
       recordVisibleRealUsername(username, element);
+      recordIdentityDisplayNames(username, boostAuthor || element);
+      if (!username) {
+        setTransientIdentityState(element, 'pending');
+        continue;
+      }
       if (!shouldAnonymizeUsername(username)) {
         restoreIdentityNeighborhood(element);
+        setTransientIdentityState(element, 'clear');
         continue;
       }
       const carrier = element.matches('a, span, strong, b, img, picture, .avatar, .username, .name, .discourse-boosts__bubble');
@@ -1321,6 +1380,7 @@
       );
       if (!replaceText && !hasAvatar) {
         restoreIdentityNeighborhood(element);
+        setTransientIdentityState(element, 'masked');
         continue;
       }
       const identity = identityFor(username, element);
@@ -1329,6 +1389,7 @@
       if (replaceText) replaceTextElement(element, identity, username);
       else restoreTextPatchKey(element, 'identity');
       if (hasAvatar) replaceAvatarsWithin(element, identity);
+      setTransientIdentityState(element, 'masked');
       ensureTargetedVisualObserver(targetedVisualContainer(element));
     }
   }
@@ -1425,14 +1486,67 @@
     }
   }
 
+  function notificationContainer(label) {
+    return label?.closest?.(
+      '.notification, .notification-list-item, .user-notification, ' +
+      '[data-notification-id], li'
+    ) || null;
+  }
+
+  function notificationIdentityCarrier(label) {
+    if (usernameOf(label)) return label;
+    const container = notificationContainer(label);
+    if (!container) return null;
+    return container.querySelector(
+      '[data-user-card], [data-username], a[href*="/u/"], ' +
+      'img.avatar, img.user-image, img[data-avatar-template]'
+    );
+  }
+
+  function notificationUsername(label) {
+    const cachedCarrier = label?.__lddNotificationCarrier;
+    const cached = normalizeUsername(label?.__lddNotificationUsername);
+    if (cached && cachedCarrier?.isConnected && notificationContainer(label)?.contains(cachedCarrier)) {
+      return cached;
+    }
+    const carrier = notificationIdentityCarrier(label);
+    const username = usernameOf(carrier);
+    if (username) {
+      label.__lddNotificationUsername = username;
+      label.__lddNotificationCarrier = carrier;
+      const container = notificationContainer(label);
+      if (container) {
+        container.__lddNotificationUsername = username;
+        container.__lddNotificationCarrier = carrier;
+      }
+    }
+    return username;
+  }
+
   function scanNotificationLabels(root) {
-    const labels = collect(root, '.notification span.item-label, .notification .item-label');
+    const labels = collect(root,
+      '.notification span.item-label, .notification .item-label, ' +
+      '.notification-list-item span.item-label, .user-notification span.item-label, ' +
+      '[data-notification-id] span.item-label'
+    );
     for (const label of labels) {
       const nodes = visibleTextNodes(label);
       if (!nodes.length) continue;
       const sources = nodes.map(node => sourceTextForPatch(label, 'notification-label', node));
       const combined = sources.join('').trim();
       const names = new Set(anonymizedUsernames());
+      const associatedUsername = notificationUsername(label);
+      if (associatedUsername) {
+        recordVisibleRealUsername(associatedUsername, label);
+        recordIdentityDisplayNames(associatedUsername, label);
+      }
+      const mappedDisplayUsername = displayNameUsername(label);
+      const directUsername = associatedUsername || mappedDisplayUsername;
+      if (directUsername) names.add(directUsername);
+      let directIdentity = null;
+      if (directUsername && shouldAnonymizeUsername(directUsername) && combined) {
+        directIdentity = identityFor(directUsername, label);
+      }
       if (runtime.state.config.pureMode && /^[A-Za-z0-9_.-]{1,40}$/.test(combined)) {
         const candidate = normalizeUsername(combined);
         names.add(candidate);
@@ -1450,15 +1564,23 @@
       }
       const pattern = new RegExp('(^|[^A-Za-z0-9_.-])(' + escaped.join('|') + ')(?![A-Za-z0-9_.-])', 'gi');
       let changed = false;
-      const cleaned = sources.map(source => source.replace(pattern, (whole, prefix, rawUsername) => {
-        const username = normalizeUsername(rawUsername);
-        if (!shouldAnonymizeUsername(username)) return whole;
-        const identity = identityFor(username, label);
-        changed = true;
+      const cleaned = directIdentity
+        ? [directIdentity.alias, ...sources.slice(1).map(() => '')]
+        : sources.map(source => source.replace(pattern, (whole, prefix, rawUsername) => {
+          const username = normalizeUsername(rawUsername);
+          if (!shouldAnonymizeUsername(username)) return whole;
+          const identity = identityFor(username, label);
+          changed = true;
+          markTriggered(label);
+          recordExposedIdentity(username, identity, label);
+          return (prefix || '') + identity.alias;
+        }));
+      if (directIdentity) {
+        changed = cleaned.join('') !== sources.join('');
         markTriggered(label);
-        recordExposedIdentity(username, identity, label);
-        return (prefix || '') + identity.alias;
-      }));
+        recordExposedIdentity(directUsername, directIdentity, label);
+        replaceAvatarsWithin(notificationIdentityCarrier(label), directIdentity);
+      }
       if (!changed || cleaned.join('') === sources.join('')) {
         if (label.__lddOriginal?.textPatches?.some(record => record.key === 'notification-label')) {
           restoreElement(label);
@@ -1953,6 +2075,7 @@
       element.removeAttribute('data-ldd-avatar-alias');
       element.removeAttribute('data-ldd-hidden-kind');
       element.removeAttribute('data-ldd-mutated');
+      element.removeAttribute('data-ldd-identity-state');
       delete element.__lddOriginal;
       delete element.__lddApplied;
     });
@@ -1966,9 +2089,13 @@
   function restoreAll() {
     stopTargetedVisualObservers();
     document.querySelectorAll('[data-ldd-mutated]').forEach(restoreElement);
+    document.querySelectorAll('[data-ldd-identity-state]').forEach(element => {
+      element.removeAttribute('data-ldd-identity-state');
+    });
     document.querySelectorAll('.ldd-card-actions').forEach(element => element.remove());
     runtime.exposedAliases.clear();
     runtime.visibleRealUsernames.clear();
+    runtime.visibleDisplayNames.clear();
   }
 
   function addScanRoot(root) {
@@ -2222,6 +2349,11 @@
       #${HEADER_BUTTON_ID} svg{width:19px;height:19px;display:block}
       .ldd-dissolved-name{font-weight:500!important;letter-spacing:.01em;text-decoration:none!important}
       .ldd-dissolved-avatar{object-fit:cover!important;background-size:cover!important;background-position:center!important;border-radius:50%!important}
+      a.reply-to-tab[data-ldd-identity-state="pending"] img.avatar,a.reply-to-tab[data-ldd-identity-state="pending"] img.user-image,a.reply-to-tab[data-ldd-identity-state="pending"] img[data-avatar-template],a.reply-to-tab[data-ldd-identity-state="pending"] .avatar,
+      .discourse-boosts__bubble[data-ldd-identity-state="pending"] img.avatar,.discourse-boosts__bubble[data-ldd-identity-state="pending"] img.user-image,.discourse-boosts__bubble[data-ldd-identity-state="pending"] img[data-avatar-template],.discourse-boosts__bubble[data-ldd-identity-state="pending"] .avatar,
+      .discourse-boosts__bubble[data-ldd-identity-state="masked"] img.avatar,.discourse-boosts__bubble[data-ldd-identity-state="masked"] img.user-image,.discourse-boosts__bubble[data-ldd-identity-state="masked"] img[data-avatar-template],.discourse-boosts__bubble[data-ldd-identity-state="masked"] .avatar,
+      a.reply-to-tab[data-ldd-identity-state="masked"] img.avatar,a.reply-to-tab[data-ldd-identity-state="masked"] img.user-image,a.reply-to-tab[data-ldd-identity-state="masked"] img[data-avatar-template],a.reply-to-tab[data-ldd-identity-state="masked"] .avatar{visibility:hidden!important}
+      a.reply-to-tab[data-ldd-identity-state="masked"] [data-ldd-avatar-alias],.discourse-boosts__bubble[data-ldd-identity-state="masked"] [data-ldd-avatar-alias]{visibility:visible!important}
       [data-ldd-mutated].ldd-neutral-avatar,[data-ldd-mutated].ldd-neutral-avatar-host{border:none!important;box-shadow:none!important;outline:none!important;animation:none!important;filter:none!important;text-shadow:none!important}
       [data-ldd-mutated].ldd-neutral-avatar-host{background-color:transparent!important}
       [data-ldd-mutated].ldd-clear-avatar-frame{background-image:none!important}
