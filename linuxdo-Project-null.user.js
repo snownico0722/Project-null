@@ -2,7 +2,8 @@
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
 // @version      0.91
-// @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
+// @homepageURL  https://github.com/snownico0722/Project-null
+// @website      https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
 // @author       qiuqiu & ChatGPT
 // @match        https://linux.do/*
