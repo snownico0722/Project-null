@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+const saved = {
+  version: 7,
+  config: { enabled: true, resetMode: 'time', replaceAvatars: true, hideIdentityDecorations: true, hideSignatures: true, mapAliasMentions: true, hideDissolvedTopics: true, cleanTopicTitles: true, pureMode: true },
+  dissolvedUsers: ['alice'], secret: '0123456789abcdefghijklmn', topicSalt: 'topic',
+  timeEpoch: { id: 'epoch', startedAt: Date.now(), lastTriggeredAt: 0 }
+};
+let stateListener = null;
+requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+cancelAnimationFrame = timer => clearTimeout(timer);
+GM_getValue = () => JSON.stringify(saved);
+GM_setValue = (key, value) => Object.assign(saved, JSON.parse(value));
+GM_addValueChangeListener = (key, listener) => { stateListener = listener; };
+GM_registerMenuCommand = () => {};
+unsafeWindow = window;
+jQuery = { ajax() { return { abort() {} }; } };
+</script>
+<header id="site-header"><div class="header-icons"></div></header>
+<table><tbody id="topics">
+  <tr class="topic-list-item" data-topic-id="201"><td><a class="title" href="/t/201">【A】🔥 Alice title</a></td><td class="posters"><a data-user-card="alice" href="/u/alice">alice</a></td></tr>
+  <tr class="topic-list-item" data-topic-id="202"><td><a class="title" href="/t/202">【B】🔥 Bob title</a></td><td class="posters"><a data-user-card="bob" href="/u/bob">bob</a></td></tr>
+</tbody></table>
+<section id="posts">
+  <article data-post-id="1"><div class="topic-avatar"><a class="main-avatar" data-user-card="alice" href="/u/alice"><img class="avatar" src="https://linux.do/user_avatar/linux.do/alice/48/1.png"></a></div><div class="names"><a class="username" data-user-card="alice" href="/u/alice">alice</a></div><div class="cooked"><hr><div class="user-signature">alice sig</div></div></article>
+  <article data-post-id="2"><div class="topic-avatar"><a class="main-avatar" data-user-card="bob" href="/u/bob"><img class="avatar" src="https://linux.do/user_avatar/linux.do/bob/48/1.png"></a></div><div class="names"><a class="username" data-user-card="bob" href="/u/bob">bob</a></div><div class="cooked"><hr><div class="user-signature">bob sig</div></div></article>
+  <article data-post-id="3"><div class="topic-avatar"><a class="main-avatar" data-user-card="caption" href="/u/caption"><img class="avatar" src="https://linux.do/user_avatar/linux.do/caption/48/1.png"></a></div><div class="names"><a class="username" data-user-card="caption" href="/u/caption">caption</a></div><div class="cooked"><hr><div class="user-signature">caption sig</div></div></article>
+</section>
+<pre id="out"></pre>
+<script src="../linuxdo-Project-null.user.js"></script>
+<script>
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const realNames = new Set(['alice', 'bob', 'caption', 'charlie']);
+
+function pureSnapshot() {
+  const names = [...document.querySelectorAll('#posts .names .username')];
+  const aliases = names.map(name => name.textContent.trim().toLowerCase());
+  return {
+    aliases,
+    identities: names.map(name => ({ real: name.dataset.userCard, alias: name.dataset.lddAlias, text: name.textContent })),
+    allNamesMasked: names.every(name => Boolean(name.dataset.lddAlias) && !realNames.has(name.textContent.trim().toLowerCase())),
+    aliasesUnique: new Set(aliases).size === aliases.length,
+    avatarsMasked: [...document.querySelectorAll('#posts img.avatar')].every(image => image.src.startsWith('data:image/svg+xml')),
+    signaturesHidden: [...document.querySelectorAll('#posts .user-signature')].every(signature => signature.hidden),
+    topicsVisible: [...document.querySelectorAll('.topic-list-item')].every(topic => !topic.hidden),
+    titlesCleaned: [...document.querySelectorAll('.topic-list-item .title')].every(title => !/[【】🔥]/u.test(title.textContent))
+  };
+}
+
+addEventListener('DOMContentLoaded', async () => {
+  await wait(220);
+  const initial = pureSnapshot();
+
+  document.querySelector('#posts').insertAdjacentHTML('beforeend', '<article data-post-id="4"><div class="topic-avatar"><a class="main-avatar" data-user-card="charlie" href="/u/charlie"><img class="avatar" src="https://linux.do/user_avatar/linux.do/charlie/48/1.png"></a></div><div class="names"><a class="username" data-user-card="charlie" href="/u/charlie">charlie</a></div><div class="cooked"><hr><div class="user-signature">charlie sig</div></div></article>');
+  await wait(200);
+  const dynamic = pureSnapshot();
+
+  const normalState = { ...saved, config: { ...saved.config, pureMode: false } };
+  stateListener?.(null, null, JSON.stringify(normalState), true);
+  await wait(220);
+  const normal = {
+    aliceMasked: document.querySelector('[data-post-id="1"] .username').textContent !== 'alice',
+    aliceTopicHidden: document.querySelector('[data-topic-id="201"]').hidden,
+    bobRestored: document.querySelector('[data-post-id="2"] .username').textContent === 'bob'
+      && !document.querySelector('[data-post-id="2"] .user-signature').hidden,
+    captionRestored: document.querySelector('[data-post-id="3"] .username').textContent === 'caption',
+    charlieRestored: document.querySelector('[data-post-id="4"] .username').textContent === 'charlie'
+  };
+
+  const failedInitial = Object.entries(initial).filter(([key, value]) => !['aliases', 'identities'].includes(key) && !value).map(([key]) => key);
+  const failedDynamic = Object.entries(dynamic).filter(([key, value]) => !['aliases', 'identities'].includes(key) && !value).map(([key]) => key);
+  const failedNormal = Object.entries(normal).filter(([, value]) => !value).map(([key]) => key);
+  out.textContent = JSON.stringify({ initial, dynamic, normal, failedInitial, failedDynamic, failedNormal, failures: Boolean(failedInitial.length || failedDynamic.length || failedNormal.length) });
+});
+</script>

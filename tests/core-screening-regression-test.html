@@ -1,0 +1,152 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+const saved = {
+  version: 7,
+  config: { enabled: true, resetMode: 'time', replaceAvatars: true, hideIdentityDecorations: true, hideSignatures: true, mapAliasMentions: true, hideDissolvedTopics: true, cleanTopicTitles: true, pureMode: false },
+  dissolvedUsers: ['alice'], secret: '0123456789abcdefghijklmn', topicSalt: 'topic',
+  timeEpoch: { id: 'epoch', startedAt: Date.now(), lastTriggeredAt: 0 }
+};
+let stateListener = null;
+requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+cancelAnimationFrame = timer => clearTimeout(timer);
+GM_getValue = () => JSON.stringify(saved);
+GM_setValue = (key, value) => Object.assign(saved, JSON.parse(value));
+GM_addValueChangeListener = (key, listener) => { stateListener = listener; };
+GM_registerMenuCommand = () => {};
+unsafeWindow = window;
+jQuery = { ajax() { return { abort() {} }; } };
+</script>
+<header id="site-header"><div class="header-icons"></div></header>
+<table><tbody>
+  <tr id="alice-topic" class="topic-list-item" data-topic-id="101">
+    <td><a class="title" href="/t/alice-topic/101">【公告】🔥 Alice topic</a></td>
+    <td class="posters"><a data-user-card="alice" href="/u/alice"><img class="avatar" src="https://linux.do/user_avatar/linux.do/alice/48/1.png"></a></td>
+  </tr>
+  <tr id="bob-topic" class="topic-list-item" data-topic-id="102">
+    <td><a class="title" href="/t/bob-topic/102">【保留】🔥 Bob topic</a></td>
+    <td class="posters"><a data-user-card="bob" href="/u/bob"><img class="avatar" src="https://linux.do/user_avatar/linux.do/bob/48/1.png"></a></td>
+  </tr>
+</tbody></table>
+<div id="alice-search" class="search-result"><div class="author"><a data-user-card="alice" href="/u/alice">alice</a></div><div class="topic-title"><a href="/t/103">【搜索】🔥 Alice result</a></div></div>
+<section id="posts">
+  <div class="topic-post" id="alice-post-wrap">
+    <article id="alice-post" data-post-id="1">
+      <div class="topic-avatar"><a class="main-avatar" data-user-card="alice" href="/u/alice"><img class="avatar" src="https://linux.do/user_avatar/linux.do/alice/48/2.png" alt="alice"></a><span class="avatar-flair">flair</span></div>
+      <div class="topic-meta-data"><div class="names"><a class="username" data-user-card="alice" href="/u/alice">alice</a><span class="user-title">Alice title</span></div></div>
+      <a class="reply-to-tab" data-user-card="alice" href="/u/alice"><img class="avatar" src="https://linux.do/user_avatar/linux.do/alice/48/3.png"><span>alice</span></a>
+      <div class="cooked">
+        <p id="mentions">hello @alice and @bob</p>
+        <aside class="quote" data-username="alice"><div class="title"><img class="avatar" src="https://linux.do/user_avatar/linux.do/alice/48/4.png">Alice Display:</div><blockquote>quoted body</blockquote></aside>
+        <div class="discourse-boosts__bubble"><a data-user-card="alice" href="/u/alice"><img class="avatar" src="https://linux.do/user_avatar/linux.do/alice/48/5.png"></a><div class="discourse-boosts__cooked">boost by @alice</div></div>
+        <hr class="signature-separator"><div class="user-signature">Alice signature</div>
+      </div>
+    </article>
+  </div>
+  <div class="topic-post" id="bob-post-wrap">
+    <article id="bob-post" data-post-id="2">
+      <div class="topic-avatar"><a class="main-avatar" data-user-card="bob" href="/u/bob"><img class="avatar" src="https://linux.do/user_avatar/linux.do/bob/48/2.png" alt="bob"></a><span class="avatar-flair">flair</span></div>
+      <div class="topic-meta-data"><div class="names"><a class="username" data-user-card="bob" href="/u/bob">bob</a><span class="user-title">Bob title</span></div></div>
+      <div class="cooked"><hr><div class="user-signature">Bob signature</div></div>
+    </article>
+  </div>
+</section>
+<li id="alice-notification" class="notification"><img class="avatar" data-user-card="alice" src="https://linux.do/user_avatar/linux.do/alice/48/6.png"><span class="item-label">Alice Display</span></li>
+<div id="user-card" class="user-card"><div class="card-content"><a class="username" data-user-card="alice" href="/u/alice">alice</a><span class="user-title">card title</span></div></div>
+<pre id="out"></pre>
+<script src="../linuxdo-Project-null.user.js"></script>
+<script>
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function maskedSnapshot() {
+  const aliceName = document.querySelector('#alice-post .names .username');
+  const alias = aliceName.dataset.lddAlias || '';
+  return {
+    alias,
+    topicHidden: document.querySelector('#alice-topic').hidden,
+    searchHidden: document.querySelector('#alice-search').hidden,
+    cleanedTitle: document.querySelector('#alice-topic .title').textContent,
+    bobTitle: document.querySelector('#bob-topic .title').textContent,
+    nameMasked: Boolean(alias && aliceName.textContent === alias),
+    avatarsMasked: [...document.querySelectorAll('#alice-post .topic-avatar img.avatar, #alice-post .quote img.avatar')].every(image => image.src.startsWith('data:image/svg+xml')),
+    decorationsHidden: document.querySelector('#alice-post .user-title').hidden && document.querySelector('#alice-post .avatar-flair').hidden,
+    signatureHidden: document.querySelector('#alice-post .user-signature').hidden && document.querySelector('#alice-post .signature-separator').hidden,
+    plainMentionMasked: Boolean(alias && document.querySelector('#mentions').textContent.includes('@' + alias) && document.querySelector('#mentions').textContent.includes('@bob')),
+    quoteMasked: Boolean(alias && document.querySelector('#alice-post .quote .title').textContent.includes(alias) && document.querySelector('#alice-post .quote blockquote').textContent === 'quoted body'),
+    replyMasked: document.querySelector('#alice-post').hasAttribute('data-ldd-reply-identity'),
+    boostMasked: document.querySelector('#alice-post .discourse-boosts__bubble').hasAttribute('data-ldd-boost-avatar'),
+    notificationMasked: !/alice/i.test(document.querySelector('#alice-notification .item-label').textContent),
+    cardMasked: Boolean(document.querySelector('#user-card [data-ldd-alias]') && document.querySelector('#user-card .user-title').hidden),
+    bobUntouched: document.querySelector('#bob-post .username').textContent === 'bob'
+      && !document.querySelector('#bob-post img.avatar').src.startsWith('data:image/svg+xml')
+      && !document.querySelector('#bob-post .user-title').hidden
+      && !document.querySelector('#bob-post .user-signature').hidden
+      && !document.querySelector('#bob-topic').hidden
+  };
+}
+
+function reuseAlicePostAsBob() {
+  const article = document.querySelector('#alice-post');
+  const carriers = article.querySelectorAll('[data-user-card="alice"]');
+  carriers.forEach(carrier => {
+    carrier.setAttribute('data-user-card', 'bob');
+    carrier.setAttribute('href', '/u/bob');
+  });
+  article.querySelectorAll('img.avatar').forEach((image, index) => {
+    image.setAttribute('src', `https://linux.do/user_avatar/linux.do/bob/48/${20 + index}.png`);
+    image.setAttribute('alt', 'bob');
+  });
+  article.querySelector('.names .username').textContent = 'bob';
+}
+
+addEventListener('DOMContentLoaded', async () => {
+  await wait(260);
+  const initial = maskedSnapshot();
+
+  const mentionNode = document.querySelector('#mentions').firstChild;
+  mentionNode.nodeValue = 'updated @alice and @bob';
+  await wait(180);
+  const externalTextRemasked = Boolean(
+    initial.alias
+    && document.querySelector('#mentions').textContent.includes('@' + initial.alias)
+    && !document.querySelector('#mentions').textContent.includes('@alice')
+  );
+
+  reuseAlicePostAsBob();
+  await wait(240);
+  const reused = {
+    name: document.querySelector('#alice-post .names .username').textContent,
+    realAvatars: document.querySelector('#alice-post .topic-avatar img.avatar').src.includes('/bob/'),
+    decorationVisible: !document.querySelector('#alice-post .user-title').hidden && !document.querySelector('#alice-post .avatar-flair').hidden,
+    signatureVisible: !document.querySelector('#alice-post .user-signature').hidden && !document.querySelector('#alice-post .signature-separator').hidden
+  };
+
+  const nextState = { ...saved, dissolvedUsers: ['alice', 'bob'] };
+  stateListener?.(null, null, JSON.stringify(nextState), true);
+  await wait(240);
+  const bobRemasked = document.querySelector('#alice-post .names .username').textContent !== 'bob'
+    && [...document.querySelectorAll('#alice-post .topic-avatar img.avatar, #alice-post .quote img.avatar')].every(image => image.src.startsWith('data:image/svg+xml'))
+    && document.querySelector('#alice-post .user-signature').hidden;
+
+  const disabledState = { ...nextState, config: { ...nextState.config, enabled: false } };
+  stateListener?.(null, null, JSON.stringify(disabledState), true);
+  await wait(180);
+  const disabledRestored = document.querySelector('#alice-post .names .username').textContent === 'bob'
+    && [...document.querySelectorAll('#alice-post img.avatar')].every(image => image.src.includes('/bob/'))
+    && !document.querySelector('#alice-post .user-signature').hidden;
+
+  const failedInitial = Object.entries(initial).filter(([key, value]) => key !== 'alias' && !value).map(([key]) => key);
+  const failures = Boolean(
+    !initial.alias
+    || failedInitial.length
+    || !externalTextRemasked
+    || reused.name !== 'bob'
+    || !reused.realAvatars
+    || !reused.decorationVisible
+    || !reused.signatureVisible
+    || !bobRemasked
+    || !disabledRestored
+  );
+  out.textContent = JSON.stringify({ initial, failedInitial, externalTextRemasked, reused, bobRemasked, disabledRestored, failures });
+});
+</script>

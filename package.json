@@ -1,0 +1,11 @@
+{
+  "name": "project-null-regression-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run-tests.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}

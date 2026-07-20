@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+const saved = {
+  version: 7,
+  config: { enabled: true, resetMode: 'time', replaceAvatars: true, hideIdentityDecorations: true, hideSignatures: true, mapAliasMentions: true, hideDissolvedTopics: false, cleanTopicTitles: false, pureMode: false },
+  dissolvedUsers: ['alice'], secret: '0123456789abcdefghijklmn', topicSalt: 'topic',
+  timeEpoch: { id: 'epoch', startedAt: Date.now(), lastTriggeredAt: 0 }
+};
+let postedData = null;
+let searchData = null;
+requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+cancelAnimationFrame = timer => clearTimeout(timer);
+GM_getValue = () => JSON.stringify(saved);
+GM_setValue = (key, value) => Object.assign(saved, JSON.parse(value));
+GM_addValueChangeListener = () => {};
+GM_registerMenuCommand = () => {};
+unsafeWindow = window;
+jQuery = {
+  ajax(url, options) {
+    if (String(url).includes('/search/users')) {
+      options.success?.({ users: [
+        { username: 'alice', name: 'Alice' },
+        { username: options.data.term, name: 'Real same-name account' }
+      ] });
+    }
+    if (String(url).includes('/posts')) postedData = options.data;
+    return { abort() {} };
+  }
+};
+</script>
+<header id="site-header"><div class="header-icons"></div></header>
+<main>
+  <a id="alice" class="username" data-user-card="alice" href="/u/alice">alice</a>
+  <div id="reply-control"><textarea class="d-editor-input"></textarea></div>
+</main>
+<pre id="out"></pre>
+<script src="../linuxdo-Project-null.user.js"></script>
+<script>
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+addEventListener('DOMContentLoaded', async () => {
+  await wait(180);
+  const alias = document.querySelector('#alice').dataset.lddAlias || '';
+  const editor = document.querySelector('.d-editor-input');
+  editor.focus();
+  editor.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+
+  const term = alias.slice(0, Math.min(5, alias.length));
+  jQuery.ajax('/search/users.json', {
+    data: { term },
+    success(data) { searchData = data; }
+  });
+
+  editor.value = `Hi @${alias} \`@${alias}\` \\@${alias} @@alice @bob`;
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+  jQuery.ajax('/posts', { data: { raw: editor.value } });
+
+  const users = searchData?.users || [];
+  const aliasCandidate = users.find(user => user.username === alias && String(user.cssClasses || '').includes('ldd-alias-candidate'));
+  const postedRaw = postedData?.raw || '';
+  out.textContent = JSON.stringify({
+    alias,
+    aliasCandidate: Boolean(aliasCandidate),
+    editorValue: editor.value,
+    postedRaw,
+    failures: Boolean(
+      !alias
+      || !aliasCandidate
+      || editor.value !== `Hi @${alias} \`@${alias}\` \\@${alias} @@alice @bob`
+      || !postedRaw.includes('Hi @alice')
+      || !postedRaw.includes(`\`@${alias}\``)
+      || !postedRaw.includes(`\\@${alias}`)
+      || !postedRaw.includes('@alice @bob')
+    )
+  });
+});
+</script>

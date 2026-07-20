@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+const saved = {
+  version: 7,
+  config: { enabled: true, resetMode: 'topic', replaceAvatars: true, hideIdentityDecorations: true, hideSignatures: true, mapAliasMentions: true, hideDissolvedTopics: false, cleanTopicTitles: false, pureMode: false },
+  dissolvedUsers: ['alice'], secret: '0123456789abcdefghijklmn', topicSalt: 'topic-salt-a',
+  timeEpoch: { id: 'time-a', startedAt: Date.now(), lastTriggeredAt: 0 }
+};
+let stateListener = null;
+requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+cancelAnimationFrame = timer => clearTimeout(timer);
+GM_getValue = () => JSON.stringify(saved);
+GM_setValue = (key, value) => Object.assign(saved, JSON.parse(value));
+GM_addValueChangeListener = (key, listener) => { stateListener = listener; };
+GM_registerMenuCommand = () => {};
+unsafeWindow = window;
+jQuery = { ajax() { return { abort() {} }; } };
+</script>
+<header id="site-header"><div class="header-icons"></div></header>
+<section>
+  <article data-post-id="1" data-topic-id="301"><div class="names"><a id="topic-a-name" class="username" data-user-card="alice" href="/u/alice">alice</a></div><div class="cooked"><p>@alice</p></div></article>
+  <article data-post-id="2" data-topic-id="302"><div class="names"><a id="topic-b-name" class="username" data-user-card="alice" href="/u/alice">alice</a></div><div class="cooked"><p>@alice</p></div></article>
+</section>
+<div id="cards"></div>
+<pre id="out"></pre>
+<script src="../linuxdo-Project-null.user.js"></script>
+<script>
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+addEventListener('DOMContentLoaded', async () => {
+  await wait(180);
+  const topicA = document.querySelector('#topic-a-name').dataset.lddAlias || '';
+  const topicB = document.querySelector('#topic-b-name').dataset.lddAlias || '';
+  const topicModeDifferent = Boolean(topicA && topicB && topicA !== topicB);
+  const mentionMatchesScope = document.querySelector('[data-topic-id="301"] .cooked').textContent.includes('@' + topicA)
+    && document.querySelector('[data-topic-id="302"] .cooked').textContent.includes('@' + topicB);
+
+  document.querySelector('#topic-a-name').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+  document.querySelector('#cards').innerHTML = '<div id="user-card" class="user-card"><div class="card-content"><a class="username" data-user-card="alice" href="/u/alice">alice</a></div></div>';
+  await wait(180);
+  const card = document.querySelector('#user-card');
+  const cardMatchesOrigin = card.querySelector('.username').dataset.lddAlias === topicA
+    && card.getAttribute('data-ldd-scope') === 'topic:301';
+
+  const timeState = {
+    ...saved,
+    config: { ...saved.config, resetMode: 'time' },
+    timeEpoch: { id: 'time-b', startedAt: Date.now(), lastTriggeredAt: 0 }
+  };
+  Object.assign(saved, timeState);
+  stateListener?.(null, null, JSON.stringify(saved), true);
+  await wait(200);
+  const timeA = document.querySelector('#topic-a-name').dataset.lddAlias || '';
+  const timeB = document.querySelector('#topic-b-name').dataset.lddAlias || '';
+  const timeModeSame = Boolean(timeA && timeA === timeB);
+
+  const oldEpoch = {
+    ...timeState,
+    timeEpoch: { id: 'expired-time', startedAt: Date.now() - 25 * 60 * 60 * 1000, lastTriggeredAt: 0 }
+  };
+  Object.assign(saved, oldEpoch);
+  stateListener?.(null, null, JSON.stringify(saved), true);
+  await wait(120);
+  document.querySelector('#topic-a-name').setAttribute('title', 'refresh');
+  await wait(220);
+  const expiredEpochReset = saved.timeEpoch.id !== 'expired-time'
+    && saved.timeEpoch.startedAt > oldEpoch.timeEpoch.startedAt;
+
+  out.textContent = JSON.stringify({
+    topicA,
+    topicB,
+    topicModeDifferent,
+    mentionMatchesScope,
+    cardMatchesOrigin,
+    timeA,
+    timeB,
+    timeModeSame,
+    expiredEpochReset,
+    failures: !topicModeDifferent || !mentionMatchesScope || !cardMatchesOrigin || !timeModeSame || !expiredEpochReset
+  });
+});
+</script>

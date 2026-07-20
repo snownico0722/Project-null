@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.8.13
+// @version      0.91
 // @homepageURL  https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
 // @author       qiuqiu & ChatGPT
@@ -321,12 +321,15 @@
     scanQueued: false,
     pendingRoots: new Set(),
     scanning: false,
+    scanExposureCache: null,
+    scanNeutralizedAvatars: null,
     observer: null,
     routeHooked: false,
     routeTimer: null,
     activeTriggerNodes: new WeakSet(),
     aliasCache: new Map(),
     scopeAliasMaps: new Map(),
+    scopeAliasUsedWords: new WeakMap(),
     composerMentionSnapshots: new WeakMap(),
     composerMentionChoices: new WeakMap(),
     activeComposerEditor: null,
@@ -340,6 +343,7 @@
     pageGeneration: 0,
     lastLocation: location.href,
     suppressMutations: 0,
+    expectedTextMutations: new WeakMap(),
     identityRevision: 0,
     visualObservers: new Map(),
     persistedStateSnapshot: ''
@@ -477,6 +481,7 @@
   function clearIdentityCaches() {
     runtime.aliasCache.clear();
     runtime.scopeAliasMaps.clear();
+    runtime.scopeAliasUsedWords = new WeakMap();
     runtime.exposedAliases.clear();
     runtime.visibleRealUsernames.clear();
     runtime.visibleDisplayNames.clear();
@@ -606,15 +611,17 @@
 
   function usernameOf(element) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return '';
+    const direct =
+      element.getAttribute('data-user-card')
+      || element.getAttribute('data-username')
+      || usernameFromHref(element.getAttribute('href'))
+      || usernameFromAvatarSrc(element.getAttribute('src'));
+    if (direct) return normalizeUsername(direct);
     const nestedAvatar = element.querySelector?.(
       'img.avatar, img.user-image, img[data-avatar-template]'
     );
     return normalizeUsername(
-      element.getAttribute('data-user-card')
-      || element.getAttribute('data-username')
-      || usernameFromHref(element.getAttribute('href'))
-      || usernameFromAvatarSrc(element.getAttribute('src'))
-      || usernameFromAvatarSrc(nestedAvatar?.getAttribute('src'))
+      usernameFromAvatarSrc(nestedAvatar?.getAttribute('src'))
       || element.__lddReplyUsername
     );
   }
@@ -773,6 +780,7 @@
 
   function buildScopeAliasMap(scope) {
     const aliases = new Map();
+    runtime.scopeAliasUsedWords.set(aliases, new Set());
     for (const username of Array.from(runtime.dissolvedSet).sort()) {
       assignScopeAlias(aliases, scope, username);
     }
@@ -781,11 +789,13 @@
 
   function assignScopeAlias(aliases, scope, username) {
     if (aliases.has(username)) return aliases.get(username);
-    const usedWords = new Set(aliases.values());
+    let usedWords = runtime.scopeAliasUsedWords.get(aliases);
+    if (!usedWords) {
+      usedWords = new Set(aliases.values());
+      runtime.scopeAliasUsedWords.set(aliases, usedWords);
+    }
     const modeSalt = runtime.state.config.resetMode === 'topic' ? runtime.state.topicSalt : '';
-    const reservedUsernames = new Set(runtime.dissolvedSet);
     const visibleNames = runtime.visibleRealUsernames.get(scope);
-    visibleNames?.forEach(value => reservedUsernames.add(value));
     const [first, second] = hashPair(runtime.state.secret + '|' + modeSalt + '|' + scope + '|' + username + '|word');
     const preferredLength = 5 + (first % 5);
     const lengthOrder = Array.from({ length: 5 }, (_, offset) => 5 + ((preferredLength - 5 + offset) % 5));
@@ -799,11 +809,16 @@
       while (bucket.length > 1 && greatestCommonDivisor(step, bucket.length) !== 1) {
         step = (step % (bucket.length - 1)) + 1;
       }
-      const startIndex = (first ^ bucketSeed) % bucket.length;
+      // JavaScript 的位异或结果是有符号整数；转为无符号数后再用作词桶下标。
+      const startIndex = ((first ^ bucketSeed) >>> 0) % bucket.length;
 
       for (let attempt = 0; attempt < bucket.length; attempt++) {
         const candidate = bucket[(startIndex + attempt * step) % bucket.length];
-        if (usedWords.has(candidate) || reservedUsernames.has(candidate)) continue;
+        if (
+          usedWords.has(candidate)
+          || runtime.dissolvedSet.has(candidate)
+          || visibleNames?.has(candidate)
+        ) continue;
         selected = candidate;
         break;
       }
@@ -812,6 +827,7 @@
 
     if (!selected) selected = fallbackWordAlias(scope, username);
     aliases.set(username, selected);
+    usedWords.add(selected);
     return selected;
   }
 
@@ -824,15 +840,24 @@
   }
 
   function isActuallyExposed(element) {
-    if (!element?.isConnected || element.closest('[hidden], [data-ldd-hidden-kind], [aria-hidden="true"]')) return false;
+    const cache = runtime.scanExposureCache;
+    if (cache?.has(element)) return cache.get(element);
+    if (!element?.isConnected || element.closest('[hidden], [data-ldd-hidden-kind], [aria-hidden="true"]')) {
+      if (element?.nodeType === Node.ELEMENT_NODE) cache?.set(element, false);
+      return false;
+    }
     let node = element;
     let depth = 0;
     while (node && node !== document.body && depth < 6) {
       const style = getComputedStyle(node);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+        cache?.set(element, false);
+        return false;
+      }
       node = node.parentElement;
       depth++;
     }
+    cache?.set(element, true);
     return true;
   }
 
@@ -865,12 +890,11 @@
     return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
   }
 
-  function recordVisibleDisplayName(username, value, element) {
+  function recordVisibleDisplayName(username, value, scope) {
     const normalizedUsername = normalizeUsername(username);
-    if (!normalizedUsername || !value || !isActuallyExposed(element)) return;
+    if (!normalizedUsername || !value || !scope) return;
     const displayName = normalizeDisplayName(value);
     if (!displayName || displayName.length > 80) return;
-    const scope = scopeFor(element);
     let names = runtime.visibleDisplayNames.get(scope);
     if (!names) {
       names = new Map();
@@ -882,7 +906,8 @@
   }
 
   function recordIdentityDisplayNames(username, element) {
-    if (!username || !element) return;
+    if (!username || !element || !isActuallyExposed(element)) return;
+    const scope = scopeFor(element);
     const values = [
       element.getAttribute?.('data-display-name'),
       element.getAttribute?.('title'),
@@ -890,7 +915,7 @@
     ];
     const text = String(element.textContent || '').replace(/\s+/g, ' ').trim();
     if (text && text.length <= 80) values.push(text);
-    values.filter(Boolean).forEach(value => recordVisibleDisplayName(username, value, element));
+    values.filter(Boolean).forEach(value => recordVisibleDisplayName(username, value, scope));
   }
 
   function displayNameUsername(label) {
@@ -1750,7 +1775,29 @@
       record.original = current;
     }
     record.applied = String(value);
-    if (current !== record.applied) node.nodeValue = record.applied;
+    if (current !== record.applied) setExpectedTextValue(node, record.applied);
+  }
+
+  function setExpectedTextValue(node, value) {
+    const expected = String(value);
+    const pending = runtime.expectedTextMutations.get(node);
+    runtime.expectedTextMutations.set(node, {
+      count: (pending?.count || 0) + 1,
+      value: expected
+    });
+    node.nodeValue = expected;
+  }
+
+  function consumeExpectedTextMutation(node) {
+    const pending = runtime.expectedTextMutations.get(node);
+    if (!pending) return false;
+    if (String(node.nodeValue || '') !== pending.value) {
+      runtime.expectedTextMutations.delete(node);
+      return false;
+    }
+    pending.count--;
+    if (pending.count <= 0) runtime.expectedTextMutations.delete(node);
+    return true;
   }
 
   function pruneTextPatchKey(owner, key, retainedNodes) {
@@ -1760,7 +1807,7 @@
     owner.__lddOriginal.textPatches = records.filter(record => {
       if (record.key !== key || retained.has(record.node)) return true;
       if (record.node.isConnected && record.node.nodeValue === record.applied) {
-        record.node.nodeValue = record.original;
+        setExpectedTextValue(record.node, record.original);
       }
       return false;
     });
@@ -1772,7 +1819,7 @@
     owner.__lddOriginal.textPatches = records.filter(record => {
       if (record.key !== key) return true;
       if (record.node.isConnected && record.node.nodeValue === record.applied) {
-        record.node.nodeValue = record.original;
+        setExpectedTextValue(record.node, record.original);
       }
       return false;
     });
@@ -1855,6 +1902,9 @@
 
   function neutralizeAvatarAppearance(avatar) {
     if (!runtime.state.config.hideIdentityDecorations || !avatar) return;
+    const scanned = runtime.scanNeutralizedAvatars;
+    if (scanned?.has(avatar)) return;
+    scanned?.add(avatar);
     const isImage = avatar.tagName === 'IMG';
     markNeutralAvatarElement(avatar, false, false);
 
@@ -2188,15 +2238,15 @@
     );
   }
 
-  function replacePlainMentionNode(node) {
+  function replacePlainMentionNode(node, regex) {
     if (node.nodeType !== Node.TEXT_NODE || shouldSkipPlainMention(node)) return;
     const owner = node.parentElement;
     const text = sourceTextForPatch(owner, 'plain-mention', node);
     if (!text.includes('@')) return;
-    const regex = escapedUsernamePattern();
     if (!regex) return;
 
     let changed = false;
+    regex.lastIndex = 0;
     const replaced = text.replace(regex, (whole, prefix, rawUsername) => {
       const username = normalizeUsername(rawUsername);
       if (!shouldAnonymizeUsername(username)) return whole;
@@ -2222,6 +2272,7 @@
       const closest = root.closest('.cooked, .excerpt, .topic-excerpt, .fps-result, .search-result, .user-stream-item, .activity-stream .item, .bookmark-list-item, .discourse-boosts__cooked');
       if (closest) roots.add(closest);
     }
+    const nodes = new Set();
     for (const textRoot of roots) {
       const walker = document.createTreeWalker(textRoot, NodeFilter.SHOW_TEXT, {
         acceptNode(node) {
@@ -2230,10 +2281,12 @@
             : NodeFilter.FILTER_REJECT;
         }
       });
-      const nodes = [];
-      while (walker.nextNode()) nodes.push(walker.currentNode);
-      nodes.forEach(replacePlainMentionNode);
+      while (walker.nextNode()) nodes.add(walker.currentNode);
     }
+    if (!nodes.size) return;
+    const regex = escapedUsernamePattern();
+    if (!regex) return;
+    nodes.forEach(node => replacePlainMentionNode(node, regex));
   }
 
   const QUOTE_TITLE_SELECTOR = [
@@ -2847,6 +2900,8 @@
   function scan(root) {
     if (runtime.scanning) return;
     runtime.scanning = true;
+    runtime.scanExposureCache = new WeakMap();
+    runtime.scanNeutralizedAvatars = new WeakSet();
     try {
       ensureHeaderButton();
       assignUserCardScopes(root);
@@ -2863,8 +2918,9 @@
       scanSignatures(root);
       scanTitles(root);
       scanUserCards(root);
-      pruneTargetedVisualObservers();
     } finally {
+      runtime.scanExposureCache = null;
+      runtime.scanNeutralizedAvatars = null;
       runtime.scanning = false;
     }
   }
@@ -2879,7 +2935,7 @@
         for (let index = original.textPatches.length - 1; index >= 0; index--) {
           const record = original.textPatches[index];
           if (record.node?.isConnected && record.node.nodeValue === record.applied) {
-            record.node.nodeValue = record.original;
+            setExpectedTextValue(record.node, record.original);
           }
         }
       }
@@ -3001,7 +3057,23 @@
       + ', .notification, .item-label, .reply-to-tab, .discourse-boosts__bubble, '
       + '.quote, [data-has-quote-controls]'
     );
-    runtime.pendingRoots.add(context || element);
+    const candidate = context || element;
+    // 沿祖先链做 O(depth) 判重；新增祖先时，已有后代留到批次结算时统一剔除。
+    for (let ancestor = candidate; ancestor; ancestor = ancestor.parentElement) {
+      if (runtime.pendingRoots.has(ancestor)) return;
+    }
+    runtime.pendingRoots.add(candidate);
+  }
+
+  function compactScanRoots(roots) {
+    const connected = new Set(roots.filter(root => root.isConnected));
+    return roots.filter(root => {
+      if (!connected.has(root)) return false;
+      for (let ancestor = root.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (connected.has(ancestor)) return false;
+      }
+      return true;
+    });
   }
 
   function queueScan(root) {
@@ -3015,9 +3087,11 @@
       if (!roots.length) return;
       if (roots.includes(document)) {
         scan(document);
+        pruneTargetedVisualObservers();
         return;
       }
-      roots.filter(root => root.isConnected).forEach(scan);
+      compactScanRoots(roots).forEach(scan);
+      pruneTargetedVisualObservers();
     });
   }
 
@@ -3064,6 +3138,7 @@
           continue;
         }
         if (mutation.type === 'characterData') {
+          if (consumeExpectedTextMutation(mutation.target)) continue;
           addScanRoot(mutation.target.parentElement);
           continue;
         }

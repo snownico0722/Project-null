@@ -1,0 +1,168 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+const COUNT = 40;
+const MAX_CONTAINS_PER_ROOT = 2;
+const dissolvedUsers = Array.from({ length: COUNT }, (_, index) => `hidden-${index}`);
+const saved = {
+  version: 7,
+  config: { enabled: true, resetMode: 'time', replaceAvatars: true, hideIdentityDecorations: true, hideSignatures: true, mapAliasMentions: true, hideDissolvedTopics: true, cleanTopicTitles: true, pureMode: false },
+  dissolvedUsers, secret: '0123456789abcdefghijklmn', topicSalt: 'topic',
+  timeEpoch: { id: 'epoch', startedAt: Date.now(), lastTriggeredAt: Date.now() }
+};
+let queryAllCount = 0;
+let computedStyleCount = 0;
+let containsCount = 0;
+const nativeElementQueryAll = Element.prototype.querySelectorAll;
+const nativeDocumentQueryAll = Document.prototype.querySelectorAll;
+const nativeComputedStyle = getComputedStyle.bind(window);
+const nativeContains = Node.prototype.contains;
+Element.prototype.querySelectorAll = function (...args) {
+  queryAllCount++;
+  return nativeElementQueryAll.apply(this, args);
+};
+Document.prototype.querySelectorAll = function (...args) {
+  queryAllCount++;
+  return nativeDocumentQueryAll.apply(this, args);
+};
+window.getComputedStyle = function (...args) {
+  computedStyleCount++;
+  return nativeComputedStyle(...args);
+};
+Node.prototype.contains = function (...args) {
+  containsCount++;
+  return nativeContains.apply(this, args);
+};
+requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 0);
+cancelAnimationFrame = timer => clearTimeout(timer);
+GM_getValue = () => JSON.stringify(saved);
+GM_setValue = (key, value) => Object.assign(saved, JSON.parse(value));
+GM_addValueChangeListener = () => {};
+GM_registerMenuCommand = () => {};
+unsafeWindow = window;
+jQuery = { ajax() { return { abort() {} }; } };
+
+function postMarkup(index, revision = 0) {
+  const hidden = `hidden-${index}`;
+  const visible = `visible-${index}`;
+  return `<article data-post-id="${index + 1}">
+    <div class="topic-avatar"><a class="main-avatar" data-user-card="${hidden}" href="/u/${hidden}"><img class="avatar" src="https://linux.do/user_avatar/linux.do/${hidden}/48/${revision + 1}.png"></a><span class="avatar-flair">flair</span></div>
+    <div class="topic-meta-data"><div class="names"><a class="username" data-user-card="${hidden}" href="/u/${hidden}">${hidden}</a><span class="user-title">badge</span></div></div>
+    <div class="cooked"><p>@${hidden} and <a data-user-card="${visible}" href="/u/${visible}">${visible}</a></p>
+      <aside class="quote" data-username="${hidden}"><div class="title"><img class="avatar" src="https://linux.do/user_avatar/linux.do/${hidden}/48/${revision + 2}.png">${hidden}:</div><blockquote>body</blockquote></aside>
+      <hr><div class="user-signature">signature-${hidden}</div>
+    </div>
+  </article>`;
+}
+
+function topicMarkup(index) {
+  const hidden = `hidden-${index}`;
+  return `<tr class="topic-list-item" data-topic-id="${1000 + index}"><td><a class="title" href="/t/${1000 + index}">【tag】topic ${index} 😀</a></td><td class="posters"><a data-user-card="${hidden}" href="/u/${hidden}">${hidden}</a></td></tr>`;
+}
+</script>
+<header id="site-header"><div class="header-icons"></div></header>
+<main id="app"></main>
+<pre id="out"></pre>
+<script>
+document.querySelector('#app').innerHTML = `<table><tbody>${Array.from({ length: COUNT }, (_, index) => topicMarkup(index)).join('')}</tbody></table><section id="posts">${Array.from({ length: COUNT }, (_, index) => postMarkup(index)).join('')}</section>`;
+</script>
+<script src="../linuxdo-Project-null.user.js"></script>
+<script>
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function waitFor(check, timeout = 8000) {
+  const deadline = performance.now() + timeout;
+  while (performance.now() < deadline) {
+    if (check()) return true;
+    await wait(25);
+  }
+  return false;
+}
+
+function screeningIsComplete() {
+  const names = [...document.querySelectorAll('#posts .names .username')];
+  const avatars = [...document.querySelectorAll('#posts .topic-avatar img.avatar, #posts .quote img.avatar')];
+  const signatures = [...document.querySelectorAll('#posts .user-signature')];
+  return names.length === COUNT
+    && names.every(name => !name.textContent.startsWith('hidden-'))
+    && avatars.length === COUNT * 2
+    && avatars.every(image => image.src.startsWith('data:image/svg+xml'))
+    && signatures.every(signature => signature.hidden);
+}
+
+function mentionsAreRemasked() {
+  const paragraphs = [...document.querySelectorAll('#posts .cooked > p')];
+  return paragraphs.length === COUNT
+    && paragraphs.every((paragraph, index) => !paragraph.textContent.includes(`@hidden-${index}`));
+}
+
+addEventListener('DOMContentLoaded', async () => {
+  const initialStart = performance.now();
+  const initialReady = await waitFor(() =>
+    screeningIsComplete()
+    && document.querySelectorAll('[data-ldd-hidden-kind="topic"]').length === COUNT
+  );
+  await wait(80);
+  const initial = {
+    ready: initialReady,
+    durationMs: Math.round(performance.now() - initialStart),
+    queryAllCount,
+    computedStyleCount
+  };
+
+  queryAllCount = 0;
+  computedStyleCount = 0;
+  containsCount = 0;
+  const burstStart = performance.now();
+  document.querySelector('#posts').innerHTML = Array.from({ length: COUNT }, (_, index) => postMarkup(index, 10)).join('');
+  const burstReady = await waitFor(screeningIsComplete);
+  await wait(80);
+  const burst = {
+    ready: burstReady,
+    durationMs: Math.round(performance.now() - burstStart),
+    queryAllCount,
+    computedStyleCount,
+    containsCount
+  };
+
+  queryAllCount = 0;
+  computedStyleCount = 0;
+  containsCount = 0;
+  const siblingStart = performance.now();
+  document.querySelectorAll('#posts .cooked > p').forEach((paragraph, index) => {
+    paragraph.firstChild.nodeValue = `updated @hidden-${index} and `;
+  });
+  const siblingReady = await waitFor(() => mentionsAreRemasked() && screeningIsComplete());
+  await wait(80);
+  const sibling = {
+    ready: siblingReady,
+    durationMs: Math.round(performance.now() - siblingStart),
+    queryAllCount,
+    computedStyleCount,
+    containsCount
+  };
+
+  const aliases = [...document.querySelectorAll('#posts .names .username')].map(name => name.textContent);
+  const correctness = {
+    noRealNames: aliases.every(name => !name.startsWith('hidden-')),
+    aliasesUnique: new Set(aliases).size === aliases.length,
+    topicsHidden: [...document.querySelectorAll('.topic-list-item')].every(topic => topic.hidden),
+    signaturesHidden: [...document.querySelectorAll('#posts .user-signature')].every(signature => signature.hidden),
+    siblingMentionsRemasked: mentionsAreRemasked()
+  };
+  const limits = {
+    initialQueryAll: initial.queryAllCount < 1400,
+    initialComputedStyles: initial.computedStyleCount < 1500,
+    burstQueryAll: burst.queryAllCount < 1100,
+    burstComputedStyles: burst.computedStyleCount < 1500,
+    burstContains: burst.containsCount <= COUNT * MAX_CONTAINS_PER_ROOT,
+    siblingContains: sibling.containsCount <= COUNT * MAX_CONTAINS_PER_ROOT
+  };
+  out.textContent = JSON.stringify({ initial, burst, sibling, correctness, limits, failures: Boolean(
+    !initial.ready
+    || !burst.ready
+    || !sibling.ready
+    || Object.values(correctness).some(value => !value)
+    || Object.values(limits).some(value => !value)
+  ) });
+});
+</script>
