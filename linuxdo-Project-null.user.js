@@ -2086,10 +2086,15 @@
       ) restoreElement(node);
       for (const sibling of [node.previousElementSibling, node.nextElementSibling]) {
         if (!sibling) continue;
-        if (
-          sibling.matches(DECORATION_ARTIFACT_SELECTOR)
-          || sibling.matches(AVATAR_DECORATION_SELECTOR)
-        ) restoreDecorationArtifactsWithin(sibling);
+        // Only cross into actual avatar decorations. Adjacent participant links also carry
+        // ldd-neutral-avatar-host and must remain masked when another user is restored.
+        const siblingCarrier = sibling.matches('[data-user-card], [data-username], a[href*="/u/"]')
+          ? sibling
+          : sibling.querySelector('[data-user-card], [data-username], a[href*="/u/"]');
+        if (shouldAnonymizeUsername(usernameOf(siblingCarrier))) continue;
+        if (sibling.matches(AVATAR_DECORATION_SELECTOR)) {
+          restoreDecorationArtifactsWithin(sibling);
+        }
       }
       if (node.matches?.('article[data-post-id], .topic-post, .user-card, #user-card, .topic-list-item, .latest-topic-list-item')) break;
       node = node.parentElement;

@@ -27,6 +27,14 @@ jQuery = { ajax() { return { abort() {} }; } };
     <td><a class="title" href="/t/bob-topic/102">【保留】🔥 Bob topic</a></td>
     <td class="posters"><a data-user-card="bob" href="/u/bob"><img class="avatar" src="https://linux.do/user_avatar/linux.do/bob/48/1.png"></a></td>
   </tr>
+  <tr id="participants-topic" class="topic-list-item" data-topic-id="104">
+    <td><a class="title" href="/t/participants-topic/104">【参与者】 Mixed topic</a></td>
+    <td class="posters topic-list-data">
+      <a data-user-card="bob" href="/u/bob"><img class="avatar" src="https://linux.do/user_avatar/linux.do/bob/48/31.png"></a>
+      <a data-user-card="alice" href="/u/alice"><img class="avatar" src="https://linux.do/user_avatar/linux.do/alice/48/32.png"></a>
+      <a data-user-card="charlie" href="/u/charlie"><img class="avatar" src="https://linux.do/user_avatar/linux.do/charlie/48/33.png"></a>
+    </td>
+  </tr>
 </tbody></table>
 <div id="alice-search" class="search-result"><div class="author"><a data-user-card="alice" href="/u/alice">alice</a></div><div class="topic-title"><a href="/t/103">【搜索】🔥 Alice result</a></div></div>
 <section id="posts">
@@ -77,6 +85,9 @@ function maskedSnapshot() {
     boostMasked: document.querySelector('#alice-post .discourse-boosts__bubble').hasAttribute('data-ldd-boost-avatar'),
     notificationMasked: !/alice/i.test(document.querySelector('#alice-notification .item-label').textContent),
     cardMasked: Boolean(document.querySelector('#user-card [data-ldd-alias]') && document.querySelector('#user-card .user-title').hidden),
+    participantMasked: document.querySelector('#participants-topic [data-user-card="alice"] img.avatar').src.startsWith('data:image/svg+xml'),
+    adjacentParticipantsUntouched: document.querySelector('#participants-topic [data-user-card="bob"] img.avatar').src.includes('/bob/')
+      && document.querySelector('#participants-topic [data-user-card="charlie"] img.avatar').src.includes('/charlie/'),
     bobUntouched: document.querySelector('#bob-post .username').textContent === 'bob'
       && !document.querySelector('#bob-post img.avatar').src.startsWith('data:image/svg+xml')
       && !document.querySelector('#bob-post .user-title').hidden
