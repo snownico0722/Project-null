@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux DO 溶解计划
 // @namespace    https://linux.do/
-// @version      0.91
+// @version      0.92
 // @homepageURL  https://github.com/snownico0722/Project-null
 // @website      https://greasyfork.org/zh-CN/scripts/587760-linux-do-%E6%BA%B6%E8%A7%A3%E8%AE%A1%E5%88%92
 // @description  将指定用户的可见身份与装扮替换或清除，并提供帖子隐藏、仅针对溶解作者的标题清洗、主页跳转保护与原生 @ 假名候选映射。
@@ -610,21 +610,46 @@
     return usernames;
   }
 
+  function usernameFromAvatarElement(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return '';
+    return usernameFromAvatarSrc(element.getAttribute('src'))
+      || usernameFromAvatarSrc(element.getAttribute('data-avatar-template'))
+      || usernameFromAvatarSrc(element.__lddOriginal?.src);
+  }
+
   function usernameOf(element) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return '';
     const direct =
       element.getAttribute('data-user-card')
       || element.getAttribute('data-username')
       || usernameFromHref(element.getAttribute('href'))
-      || usernameFromAvatarSrc(element.getAttribute('src'));
+      || usernameFromAvatarElement(element);
     if (direct) return normalizeUsername(direct);
     const nestedAvatar = element.querySelector?.(
       'img.avatar, img.user-image, img[data-avatar-template]'
     );
     return normalizeUsername(
-      usernameFromAvatarSrc(nestedAvatar?.getAttribute('src'))
+      usernameFromAvatarElement(nestedAvatar)
       || element.__lddReplyUsername
     );
+  }
+
+  const TOPIC_POSTER_AVATAR_SELECTOR = 'td.posters img.avatar, .posters.topic-list-data img.avatar';
+  const IDENTITY_SCAN_SELECTOR = [
+    '[data-user-card]',
+    '[data-username]',
+    'a[href*="/u/"]',
+    'a.reply-to-tab',
+    '.discourse-boosts__bubble',
+    TOPIC_POSTER_AVATAR_SELECTOR
+  ].join(',');
+
+  function identityElements(root) {
+    return collect(root, IDENTITY_SCAN_SELECTOR).filter(element => {
+      if (!element.matches(TOPIC_POSTER_AVATAR_SELECTOR)) return true;
+      const carrier = element.closest('[data-user-card], [data-username], a[href*="/u/"]');
+      return !carrier || carrier === element || !usernameOf(carrier);
+    });
   }
 
   function topicIdFromHref(href) {
@@ -926,8 +951,7 @@
   }
 
   function primeVisibleRealUsernames(root) {
-    const selector = '[data-user-card], [data-username], a[href*="/u/"], a.reply-to-tab, .discourse-boosts__bubble';
-    for (const element of collect(root, selector)) {
+    for (const element of identityElements(root)) {
       const boostAuthor = element.matches('.discourse-boosts__bubble')
         ? element.querySelector('[data-user-card], [data-username], a[href*="/u/"]')
         : null;
@@ -2173,8 +2197,7 @@
   }
 
   function scanIdentities(root) {
-    const selector = '[data-user-card], [data-username], a[href*="/u/"], a.reply-to-tab, .discourse-boosts__bubble';
-    const elements = collect(root, selector);
+    const elements = identityElements(root);
 
     for (const element of elements) {
       const isBoostBubble = element.matches('.discourse-boosts__bubble');
@@ -2692,7 +2715,8 @@
       '.author a[data-user-card], ' +
       '.posters a[href*="/u/"], ' +
       '.topic-poster a[href*="/u/"], ' +
-      '.author a[href*="/u/"]'
+      '.author a[href*="/u/"], ' +
+      TOPIC_POSTER_AVATAR_SELECTOR
     );
   }
 

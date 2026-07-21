@@ -35,6 +35,14 @@ jQuery = { ajax() { return { abort() {} }; } };
       <a data-user-card="charlie" href="/u/charlie"><img class="avatar" src="https://linux.do/user_avatar/linux.do/charlie/48/33.png"></a>
     </td>
   </tr>
+  <tr id="direct-participants-topic" class="topic-list-item" data-topic-id="105">
+    <td><a class="title" href="/t/direct-participants-topic/105">【参与者】 Direct avatars</a></td>
+    <td class="posters topic-list-data">
+      <img id="direct-bob-avatar" class="avatar" src="https://linux.do/user_avatar/linux.do/bob/48/41.png">
+      <img id="direct-alice-avatar" class="avatar" src="https://linux.do/user_avatar/linux.do/alice/48/42.png">
+      <img id="direct-charlie-avatar" class="avatar" src="https://linux.do/user_avatar/linux.do/charlie/48/43.png">
+    </td>
+  </tr>
 </tbody></table>
 <div id="alice-search" class="search-result"><div class="author"><a data-user-card="alice" href="/u/alice">alice</a></div><div class="topic-title"><a href="/t/103">【搜索】🔥 Alice result</a></div></div>
 <section id="posts">
@@ -88,6 +96,9 @@ function maskedSnapshot() {
     participantMasked: document.querySelector('#participants-topic [data-user-card="alice"] img.avatar').src.startsWith('data:image/svg+xml'),
     adjacentParticipantsUntouched: document.querySelector('#participants-topic [data-user-card="bob"] img.avatar').src.includes('/bob/')
       && document.querySelector('#participants-topic [data-user-card="charlie"] img.avatar').src.includes('/charlie/'),
+    directParticipantMasked: document.querySelector('#direct-alice-avatar').src.startsWith('data:image/svg+xml'),
+    directAdjacentParticipantsUntouched: document.querySelector('#direct-bob-avatar').src.includes('/bob/')
+      && document.querySelector('#direct-charlie-avatar').src.includes('/charlie/'),
     bobUntouched: document.querySelector('#bob-post .username').textContent === 'bob'
       && !document.querySelector('#bob-post img.avatar').src.startsWith('data:image/svg+xml')
       && !document.querySelector('#bob-post .user-title').hidden
@@ -116,12 +127,17 @@ addEventListener('DOMContentLoaded', async () => {
 
   const mentionNode = document.querySelector('#mentions').firstChild;
   mentionNode.nodeValue = 'updated @alice and @bob';
+  document.querySelector('#direct-alice-avatar').setAttribute(
+    'src',
+    'https://linux.do/user_avatar/linux.do/alice/48/44.png'
+  );
   await wait(180);
   const externalTextRemasked = Boolean(
     initial.alias
     && document.querySelector('#mentions').textContent.includes('@' + initial.alias)
     && !document.querySelector('#mentions').textContent.includes('@alice')
   );
+  const directParticipantRemasked = document.querySelector('#direct-alice-avatar').src.startsWith('data:image/svg+xml');
 
   reuseAlicePostAsBob();
   await wait(240);
@@ -144,13 +160,15 @@ addEventListener('DOMContentLoaded', async () => {
   await wait(180);
   const disabledRestored = document.querySelector('#alice-post .names .username').textContent === 'bob'
     && [...document.querySelectorAll('#alice-post img.avatar')].every(image => image.src.includes('/bob/'))
-    && !document.querySelector('#alice-post .user-signature').hidden;
+    && !document.querySelector('#alice-post .user-signature').hidden
+    && document.querySelector('#direct-alice-avatar').src.includes('/alice/48/44.png');
 
   const failedInitial = Object.entries(initial).filter(([key, value]) => key !== 'alias' && !value).map(([key]) => key);
   const failures = Boolean(
     !initial.alias
     || failedInitial.length
     || !externalTextRemasked
+    || !directParticipantRemasked
     || reused.name !== 'bob'
     || !reused.realAvatars
     || !reused.decorationVisible
@@ -158,6 +176,6 @@ addEventListener('DOMContentLoaded', async () => {
     || !bobRemasked
     || !disabledRestored
   );
-  out.textContent = JSON.stringify({ initial, failedInitial, externalTextRemasked, reused, bobRemasked, disabledRestored, failures });
+  out.textContent = JSON.stringify({ initial, failedInitial, externalTextRemasked, directParticipantRemasked, reused, bobRemasked, disabledRestored, failures });
 });
 </script>
